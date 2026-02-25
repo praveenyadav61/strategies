@@ -1,8 +1,8 @@
 from yahoo_provider import YahooDataProvider
 from data_loader import DataLoader
-from nifty200_universe import Nifty200Universe
+from nifty500_universe import Nifty500Universe
 
-universe = Nifty200Universe()
+universe = Nifty500Universe()
 symbols = universe.get_symbols()
 
 provider = YahooDataProvider()

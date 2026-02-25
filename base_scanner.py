@@ -39,6 +39,9 @@ class BaseFormationScanner:
 
         return near_high and tight_range and vol_contracting and volume_dry
 
+    def check_flat_base(self, df):
+        
+
     def scan_universe(self):
 
         base_stocks = []

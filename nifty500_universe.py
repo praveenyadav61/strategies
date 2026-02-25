@@ -3,9 +3,9 @@ import pandas as pd
 from io import StringIO
 
 
-class Nifty200Universe:
+class Nifty500Universe:
 
-    NSE_URL = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
+    NSE_URL = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
 
     def get_symbols(self):
         headers = {"User-Agent": "Mozilla/5.0"}

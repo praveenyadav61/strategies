@@ -1,12 +1,12 @@
 from yahoo_provider import YahooDataProvider
 from data_loader import DataLoader
-from nifty200_universe import Nifty200Universe
+from nifty500_universe import Nifty500Universe
 
 
 def main():
 
-    print("Fetching Nifty 200 symbols...")
-    universe = Nifty200Universe()
+    print("Fetching Nifty 500 symbols...")
+    universe = Nifty500Universe()
     symbols = universe.get_symbols()
 
     print(f"Total symbols: {len(symbols)}")
