@@ -57,11 +57,15 @@ def detect_momentum_base(weekly):
     weekly["tight_range"] = weekly["range_8"] < 0.22 #0.15
 
 
+    weekly["sideways"] = abs((weekly["Close"] - weekly["Close"].shift(4)) / weekly["Close"].shift(4)) < 0.05
+
+
     # --- 4️⃣ Final Momentum Base Condition ---
     weekly["momentum_base"] = (
         weekly["strong_position"] &
         weekly["sustained_low_vol"] &
-        weekly["tight_range"]
+        weekly["tight_range"]&
+        weekly["sideways"]
     )
 
     return weekly
@@ -116,4 +120,4 @@ for file in files:
 
 
 print("\nMomentum Base Stocks (Weekly):")
-print(results)
+print(len(results),":",results)
