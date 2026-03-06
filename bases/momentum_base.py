@@ -74,10 +74,18 @@ def detect_momentum_base(weekly):
 # -----------------------------
 # Scan All Stocks
 # -----------------------------
-data_path = "data/market_data/*.parquet"
+data_path = "data/test_data/*.parquet"
 files = glob.glob(data_path)
 
 results = []
+
+##################
+strong_position = []
+sustqained_low_vol = []
+tight_range = []
+sideways = []
+
+##################
 
 for file in files:
 
@@ -114,10 +122,25 @@ for file in files:
         # Check latest week
         if weekly.iloc[-1]["momentum_base"]:
             results.append(symbol)
-
+##################################################################
+        if weekly.iloc[-1]["strong_position"]:
+            strong_position.append(symbol)
+        if weekly.iloc[-1]["sustained_low_vol"]:
+            sustqained_low_vol.append(symbol)
+        if weekly.iloc[-1]["tight_range"]:
+            tight_range.append(symbol)
+        if weekly.iloc[-1]["sideways"]:
+            sideways.append(symbol)
+#######################################################################
     except Exception as e:
         print(f"Error processing {symbol}: {e}")
 
+
+with open("momentum_base_components.txt", "w") as f:
+    f.write(f"Strong Position: {len(strong_position)}\n")
+    f.write(f"Sustained Low Vol: {len(sustqained_low_vol)}\n")
+    f.write(f"Tight Range: {len(tight_range)}\n")
+    f.write(f"Sideways: {len(sideways)}\n")
 
 print("\nMomentum Base Stocks (Weekly):")
 print(len(results),":",results)
