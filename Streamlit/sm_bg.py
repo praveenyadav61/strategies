@@ -5,23 +5,11 @@ import os
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# ===============================
-# ======== PARAMETERS from cup_scanner.py ===========
-# ===============================
-MIN_WEEKS = 8 # from base_formation
-MAX_WEEKS = 65
-MIN_DEPTH = 0.18 # from base_formation
-MAX_DEPTH = 0.65 # from base_formation
-RECOVERY_MIN = 0.65 # from base_formation
-RECOVERY_MAX = 1.10 # from base_formation
-ATR_WINDOW = 14
-COMPRESSION_LOOKBACK = 10
-
 data_path = '../data/market_data/'
 # Corrected path for Streamlit execution context
 if not os.path.exists(data_path):
     data_path = 'data/market_data/'
-def run_full_scan():
+def run_full_scan(params):
     all_files = [f for f in os.listdir(data_path) if f.endswith('.parquet')]
     all_stocks_conditions = []
     progress_bar = st.progress(0)
@@ -46,18 +34,21 @@ def run_full_scan():
                 'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
             }).dropna()
 
-            if len(weekly_df) < MAX_WEEKS:
+            if len(weekly_df) < params['MAX_WEEKS']:
                 continue
 
-            weekly_df = calculate_cup_metrics(weekly_df)
+            weekly_df = calculate_cup_metrics(weekly_df, params)
             
-            conditions = check_cup_conditions(weekly_df)
+            conditions = check_cup_conditions(weekly_df, params)
 
-            if conditions and all(conditions.values()):
-                stock_condition = {'Symbol': symbol}
-                stock_condition.update(conditions)
-                all_stocks_conditions.append(stock_condition)
-                 
+            if conditions:
+                # Check if all conditions except the last one ("Volatility Compressed") are True.
+                # This allows us to see stocks that are setting up but haven't yet passed the final test.
+                all_but_last_conditions = list(conditions.values())[:-1]
+                if all(all_but_last_conditions):
+                    stock_condition = {'Symbol': symbol}
+                    stock_condition.update(conditions)
+                    all_stocks_conditions.append(stock_condition)
         except Exception as e:
             st.error(f"Could not process {symbol}: {e}")
         
@@ -66,7 +57,15 @@ def run_full_scan():
     return pd.DataFrame(all_stocks_conditions)
 
 
-def check_cup_conditions(df):
+def check_cup_conditions(df, params):
+    MIN_WEEKS = params['MIN_WEEKS']
+    MAX_WEEKS = params['MAX_WEEKS']
+    MIN_DEPTH = params['MIN_DEPTH']
+    MAX_DEPTH = params['MAX_DEPTH']
+    RECOVERY_MIN = params['RECOVERY_MIN']
+    RECOVERY_MAX = params['RECOVERY_MAX']
+    COMPRESSION_LOOKBACK = params['COMPRESSION_LOOKBACK']
+
     if len(df) < MAX_WEEKS:
         return None
 
@@ -126,12 +125,12 @@ def check_cup_conditions(df):
         f"Duration (>{MIN_WEEKS}w)": duration_ok,
         "Rounded Bottom": rounded_condition,
         f"Recovery ({RECOVERY_MIN:.0%}-{RECOVERY_MAX:.0%})": recovery_ok,
-        "Volatility Compressed": compression_ok # Kept from original logic
+        "Volatility Compressed": compression_ok 
     }
     
     return conditions
 
-def calculate_cup_metrics(df):
+def calculate_cup_metrics(df, params):
     df = df.copy()
     df = df.loc[:,~df.columns.duplicated()]
     
@@ -148,18 +147,18 @@ def calculate_cup_metrics(df):
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df['atr'] = tr.rolling(ATR_WINDOW).mean()
+    df['atr'] = tr.rolling(params['ATR_WINDOW']).mean()
     
     return df
 
 
 
-def plot_cup_formation_smbg(df_weekly, symbol):
+def plot_cup_formation_smbg(df_weekly, symbol, params):
     """
     Generates a Plotly chart to visualize a cup formation on weekly data.
     This function is designed to be consistent with the scanner logic in this file.
     """
-    df = calculate_cup_metrics(df_weekly.copy())
+    df = calculate_cup_metrics(df_weekly.copy(), params)
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                           vertical_spacing=0.05,
@@ -178,6 +177,7 @@ def plot_cup_formation_smbg(df_weekly, symbol):
 
     # 2. Logic to find and draw the cup pattern for visualization
     # This mirrors the logic in `check_cup_conditions` to ensure the plot is accurate.
+    MAX_WEEKS = params['MAX_WEEKS']
     if len(df) >= MAX_WEEKS:
         window = df[-MAX_WEEKS:].copy()
         peak_idx = window['High'].idxmax()
