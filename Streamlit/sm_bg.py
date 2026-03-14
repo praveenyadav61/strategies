@@ -2,13 +2,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import sys
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+# Ensure project-root imports work when this file is executed directly.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+from data_layer.data_engine import DataEngine
 
 #######DEFAULT PARAMETERS#######
 default_params = {
-        'MIN_WEEKS': 40,
-        'MAX_WEEKS': 65,
+        'MIN_WEEKS': 8,
+        'MAX_WEEKS': 52,
         'MIN_DEPTH': 15 / 100.0,
         'MAX_DEPTH': 60 / 100.0,
         'RECOVERY_MIN': 65 / 100.0,
@@ -33,15 +39,31 @@ def run_full_scan(params=default_params):
         status_text.text(f"Scanning {symbol} ({i+1}/{len(all_files)})")
         
         try:
-            df = pd.read_parquet(os.path.join(data_path, filename))
-            if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'])
-                df.set_index('Date', inplace=True)
-            
-            # FIX MULTIINDEX
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+        # # ---------- FAST FILTER READ ----------
+            data_engine = DataEngine()
+            df_tail = data_engine.get_symbol(symbol).tail(250)
 
+            df_tail.index = pd.to_datetime(df_tail.index)
+            df_tail = df_tail.sort_index()
+
+            if isinstance(df_tail.columns, pd.MultiIndex):
+                df_tail.columns = df_tail.columns.get_level_values(0)
+
+            df_tail = df_tail.loc[:, ~df_tail.columns.duplicated()]
+
+            close = df_tail["Close"]
+
+            sma200 = close.rolling(200).mean()
+            sma50 = close.rolling(50).mean()
+
+            last_close = close.iloc[-1]
+            last_sma200 = sma200.iloc[-1]
+            last_sma50 = sma50.iloc[-1]
+
+            if not (last_close > last_sma200 and last_sma50 > last_sma200):
+                continue
+            data_engine = DataEngine()
+            df = data_engine.get_symbol(symbol)
             # Resample to weekly, as per cup_scanner.py
             weekly_df = df.resample('W').agg({
                 'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
@@ -68,6 +90,7 @@ def run_full_scan(params=default_params):
         progress_bar.progress((i + 1) / len(all_files))
     status_text.text("Scan Complete!")
     print(f"Found {len(all_stocks_conditions)} stocks meeting the conditions.")
+    print("Sample results:", all_stocks_conditions)
     return pd.DataFrame(all_stocks_conditions)
 
 
