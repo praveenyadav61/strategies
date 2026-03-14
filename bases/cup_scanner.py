@@ -7,12 +7,12 @@ from glob import glob
 # ======== PARAMETERS ===========
 # ===============================
 
-DATA_FOLDER = "data/market_data"   # your folder
+DATA_FOLDER = "data/daily"   # your folder
 MIN_WEEKS = 8                      # minimum base duration 40
 MAX_WEEKS = 52                     # maximum base duration
 MIN_DEPTH = 0.15                   # 15%
 MAX_DEPTH = 0.60                   # 40%
-NEAR_HIGH_THRESHOLD = 0.4          # above 60% of depth
+NEAR_HIGH_THRESHOLD = 0.2          # above 60% of depth
 ATR_WINDOW = 14
 COMPRESSION_LOOKBACK = 10
 
@@ -169,3 +169,4 @@ print(cup_stocks)
 
 #['ABB.NS', 'ANANDRATHI.NS', 'AUROPHARMA.NS', 'BIOCON.NS', 'IPCALAB.NS', 'KTKBANK.NS', 'NATCOPHARM.NS', 'SONACOMS.NS', 'TIMKEN.NS', 'TORNTPOWER.NS', 'WHEELS.NS']
 #['ABB.NS', 'ANANDRATHI.NS', 'ARVIND.NS', 'AUROPHARMA.NS', 'BIOCON.NS', 'BLUESTARCO.NS', 'CHENNPETRO.NS', 'FLAIR.NS', 'GMRAIRPORT.NS', 'GODAVARIB.NS', 'IPCALAB.NS', 'KINGFA.NS', 'KTKBANK.NS', 'MACPOWER.NS', 'NATCOPHARM.NS', 'NLCINDIA.NS', 'PKTEA.NS', 'PREMIERPOL.NS', 'PRIVISCL.NS', 'RISHABH.NS', 'SATIN.NS', 'SKYGOLD.NS', 'SONACOMS.NS', 'SUKHJITS.NS', 'SUNTV.NS', 'SYRMA.NS', 'TIMKEN.NS', 'TORNTPOWER.NS', 'TRIVENI.NS', 'TVSHLTD.NS', 'UNIPARTS.NS', 'WHEELS.NS']
+#['AARTIIND.NS', 'ANANDRATHI.NS', 'GRWRHITECH.NS', 'IPCALAB.NS', 'NLCINDIA.NS', 'PFC.NS', 'POWERGRID.NS', 'PREMIERPOL.NS', 'SKYGOLD.NS', 'SONACOMS.NS', 'TIMKEN.NS', 'TORNTPOWER.NS', 'WHEELS.NS']

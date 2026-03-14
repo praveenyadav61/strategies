@@ -57,7 +57,7 @@ elif page == "Base_formation":
             event = st.dataframe(
                 base_df,
                 use_container_width=True,
-                hide_index=True,
+                hide_index=False,
                 on_select="rerun",
                 selection_mode="single-row"
             )

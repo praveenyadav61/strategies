@@ -5,11 +5,24 @@ import os
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-data_path = '../data/market_data/'
+#######DEFAULT PARAMETERS#######
+default_params = {
+        'MIN_WEEKS': 40,
+        'MAX_WEEKS': 65,
+        'MIN_DEPTH': 15 / 100.0,
+        'MAX_DEPTH': 60 / 100.0,
+        'RECOVERY_MIN': 65 / 100.0,
+        'RECOVERY_MAX': 110 / 100.0,
+        'ATR_WINDOW': 14,
+        'COMPRESSION_LOOKBACK': 10,
+    }
+
+
+data_path = '../data/daily/'
 # Corrected path for Streamlit execution context
 if not os.path.exists(data_path):
-    data_path = 'data/market_data/'
-def run_full_scan(params):
+    data_path = 'data/daily/'
+def run_full_scan(params=default_params):
     all_files = [f for f in os.listdir(data_path) if f.endswith('.parquet')]
     all_stocks_conditions = []
     progress_bar = st.progress(0)
@@ -54,6 +67,7 @@ def run_full_scan(params):
         
         progress_bar.progress((i + 1) / len(all_files))
     status_text.text("Scan Complete!")
+    print(f"Found {len(all_stocks_conditions)} stocks meeting the conditions.")
     return pd.DataFrame(all_stocks_conditions)
 
 
@@ -210,3 +224,5 @@ def plot_cup_formation_smbg(df_weekly, symbol, params):
     fig.update_yaxes(title_text="Volume", row=2, col=1)
 
     return fig
+
+run_full_scan()

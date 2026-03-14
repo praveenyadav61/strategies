@@ -1,23 +1,33 @@
-from yahoo_provider import YahooDataProvider
-from data_loader import DataLoader
-from nifty500_universe import Nifty500Universe
-
+# from yahoo_provider import YahooDataProvider
+# from data_layer.data_loader import DataLoader
+# from nifty500_universe import Nifty500Universe
+from engine.backtest_engine import BacktestEngine
+from data_layer.data_engine import DataEngine
+from engine.portfolio import Portfolio
 
 def main():
 
-    print("Fetching Nifty 500 symbols...")
-    universe = Nifty500Universe()
-    symbols = universe.get_symbols()
+    data_engine = DataEngine()
 
-    print(f"Total symbols: {len(symbols)}")
+    portfolio = Portfolio(1000000)
 
-    provider = YahooDataProvider()
-    loader = DataLoader(provider)
+    engine = BacktestEngine(data_engine, portfolio)
 
-    print("Updating data...")
-    loader.update_universe(symbols)
+    equity = engine.run("RELIANCE", momentum_strategy)
 
-    print("Done.")
+    # print("Fetching Nifty 500 symbols...")
+    # universe = Nifty500Universe()
+    # symbols = universe.get_symbols()
+
+    # print(f"Total symbols: {len(symbols)}")
+
+    # provider = YahooDataProvider()
+    # loader = DataLoader(provider)
+
+    # print("Updating data...")
+    # loader.update_universe(symbols)
+
+    # print("Done.")
 
 
 if __name__ == "__main__":

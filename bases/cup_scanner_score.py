@@ -7,7 +7,7 @@ from glob import glob
 # ======== PARAMETERS ===========
 # ===============================
 
-DATA_FOLDER = "data/market_data"   # your folder
+DATA_FOLDER = "data/daily"   # your folder
 MIN_WEEKS = 30                     # minimum base duration
 MAX_WEEKS = 65                     # maximum base duration
 MIN_DEPTH = 0.15                   # 15%

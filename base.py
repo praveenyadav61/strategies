@@ -38,7 +38,7 @@ def detect_weekly_flat_base(df):
 # MAIN EXECUTION
 # -----------------------------
 
-data_path = "data/market_data"
+data_path = "data/daily"
 
 # If ticker passed → use only that file
 if len(sys.argv) > 1:

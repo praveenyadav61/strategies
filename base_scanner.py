@@ -4,7 +4,7 @@ import pandas as pd
 
 class BaseFormationScanner:
 
-    def __init__(self, data_dir="data/market_data"):
+    def __init__(self, data_dir="data/daily"):
         self.data_dir = data_dir
 
     def check_base(self, df):
@@ -40,6 +40,7 @@ class BaseFormationScanner:
         return near_high and tight_range and vol_contracting and volume_dry
 
     def check_flat_base(self, df):
+        return True
         
 
     def scan_universe(self):

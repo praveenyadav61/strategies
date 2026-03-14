@@ -5,7 +5,7 @@ import numpy as np
 
 class EMATrendScanner:
 
-    def __init__(self, data_dir="data/market_data"):
+    def __init__(self, data_dir="data/daily"):
         self.data_dir = data_dir
 
     def check_ema_trend(self, df):
