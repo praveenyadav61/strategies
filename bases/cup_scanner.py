@@ -12,9 +12,18 @@ MIN_WEEKS = 8                      # minimum base duration 40
 MAX_WEEKS = 52                     # maximum base duration
 MIN_DEPTH = 0.15                   # 15%
 MAX_DEPTH = 0.60                   # 40%
-NEAR_HIGH_THRESHOLD = 0.2          # above 60% of depth
+NEAR_HIGH_THRESHOLD = 0.4          # above 60% of depth
 ATR_WINDOW = 14
 COMPRESSION_LOOKBACK = 10
+
+
+################GLOBAL VARIABLES################
+min_week_stocks=[]
+min_depth_stocks=[]
+duration_stocks=[]
+near_high_stocks=[]
+
+################################################
 
 # ===============================
 # ===== HELPER FUNCTIONS ========
@@ -22,14 +31,14 @@ COMPRESSION_LOOKBACK = 10
 
 def dma_filter(df):
 
-    sma200 = df["close"].rolling(200).mean()
-    sma50 = df["close"].rolling(50).mean()
+    ema200 = df["close"].ewm(span=200, adjust=False).mean()
+    ema50 = df["close"].ewm(span=50, adjust=False).mean()
 
     last_close = df["close"].iloc[-1]
-    last_sma200 = sma200.iloc[-1]
-    last_sma50 = sma50.iloc[-1]
+    last_ema200 = ema200.iloc[-1]
+    last_ema50 = ema50.iloc[-1]
 
-    return (last_close > last_sma200) and (last_sma50 > last_sma200)
+    return (last_close > last_ema200) and (last_ema50 > last_ema200)
 
 
 def resample_weekly(df):
@@ -57,33 +66,47 @@ def compute_atr(df, window):
     atr = tr.rolling(window).mean()
     return atr
 
-def detect_cup(df):
+def detect_cup(df,stock):
     if len(df) < MAX_WEEKS:
         return False
     window = df[-MAX_WEEKS:]
-    
-    peak_idx = window['High'].idxmax()
+
+    # Peak must occur before the last MIN_WEEKS
+    peak_search_window = window.iloc[:-MIN_WEEKS]
+
+    peak_idx = peak_search_window['High'].idxmax()
     peak_price = window.loc[peak_idx, 'High']
 
     after_peak = window.loc[peak_idx:]
+    # print(f"{stock} - Peak at {peak_price} on {peak_idx.date()}, Weeks after peak: {len(after_peak)}")
     if len(after_peak) < MIN_WEEKS:
         return False
-
+    #################################
+    min_week_stocks.append(stock)
+    #################################
     bottom_idx = after_peak['Low'].idxmin()
     bottom_price = after_peak.loc[bottom_idx, 'Low']
 
     depth = (peak_price - bottom_price) / peak_price
     if not (MIN_DEPTH <= depth <= MAX_DEPTH):
         return False
-
+    #################################
+    min_depth_stocks.append(stock)
+    #################################
     duration = (bottom_idx - peak_idx).days / 7
     if duration < MIN_WEEKS:
         return False
+    #################################
+    duration_stocks.append(stock)
+    #################################
 
     current_price = window['Close'].iloc[-1]
     near_high = abs(current_price - peak_price) / (peak_price - bottom_price)
     if near_high > NEAR_HIGH_THRESHOLD:
         return False
+    #################################
+    near_high_stocks.append(stock)
+    #################################
 
     # Volatility compression
     # window['ATR'] = compute_atr(window, ATR_WINDOW)
@@ -126,14 +149,15 @@ for file in files:
 
         close = df_tail["Close"]
 
-        sma200 = close.rolling(200).mean()
-        sma50 = close.rolling(50).mean()
+        ema200 = close.ewm(span=200, adjust=False).mean()
+        ema50 = close.ewm(span=50, adjust=False).mean()
 
         last_close = close.iloc[-1]
-        last_sma200 = sma200.iloc[-1]
-        last_sma50 = sma50.iloc[-1]
+        last_ema200 = ema200.iloc[-1]
+        last_ema50 = ema50.iloc[-1]
+        # print("Checking", stock, "Close:", last_close, "EMA200:", last_ema200, "EMA50:", last_ema50)
 
-        if not (last_close > last_sma200 and last_sma50 > last_sma200):
+        if not (last_close > last_ema200 and last_ema50 > last_ema200):
             continue
 
         # ---------- STORE FILTERED SYMBOL ----------
@@ -144,7 +168,7 @@ for file in files:
 
         weekly = resample_weekly(df)
 
-        if detect_cup(weekly):
+        if detect_cup(weekly,stock):
             cup_stocks.append(stock)
 
     except Exception as e:
@@ -159,7 +183,16 @@ with open("dma_filtered_symbols.txt", "w") as f:
 
 print("\n===== DMA FILTER PASSED =====")
 print(f"Total: {len(dma_filtered_symbols)}")
-# print(dma_filtered_symbols)
+
+#################################
+print("dma_filtered_stocks :",len(dma_filtered_symbols))
+print("min_week_stocks :",len(min_week_stocks))
+print("min_depth_stocks :",len(min_depth_stocks))
+print("duration_stocks :",len(duration_stocks))
+print("near_high_stocks :",len(near_high_stocks))
+
+#################################
+
 
 print("\n===== CUP PATTERN STOCKS =====")
 print(f"Total Found: {len(cup_stocks)}")
