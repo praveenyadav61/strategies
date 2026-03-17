@@ -7,7 +7,7 @@ from glob import glob
 # ======== PARAMETERS ===========
 # ===============================
 
-DATA_FOLDER = "data/daily"   # your folder
+DATA_FOLDER = "data/test_data"   # your folder
 MIN_WEEKS = 8                      # minimum base duration 40
 MAX_WEEKS = 52                     # maximum base duration
 MIN_DEPTH = 0.15                   # 15%
@@ -67,10 +67,11 @@ def compute_atr(df, window):
     return atr
 
 def detect_cup(df,stock):
+    print("yes")
     if len(df) < MAX_WEEKS:
         return False
     window = df[-MAX_WEEKS:]
-
+    print("last closing price :",window['Close'].iloc[-1])
     # Peak must occur before the last MIN_WEEKS
     peak_search_window = window.iloc[:-MIN_WEEKS]
 
@@ -78,7 +79,7 @@ def detect_cup(df,stock):
     peak_price = window.loc[peak_idx, 'High']
 
     after_peak = window.loc[peak_idx:]
-    # print(f"{stock} - Peak at {peak_price} on {peak_idx.date()}, Weeks after peak: {len(after_peak)}")
+    print(f"{stock} - Peak at {peak_price} on {peak_idx.date()}, Weeks after peak: {len(after_peak)}")
     if len(after_peak) < MIN_WEEKS:
         return False
     #################################
@@ -138,7 +139,7 @@ for file in files:
 
         # ---------- FAST FILTER READ ----------
         df_tail = pd.read_parquet(file).tail(250)
-
+        # print(f"Processing {stock} - Last 5 rows:\n{df_tail.tail()}\n")
         df_tail.index = pd.to_datetime(df_tail.index)
         df_tail = df_tail.sort_index()
 
@@ -184,14 +185,14 @@ with open("dma_filtered_symbols.txt", "w") as f:
 print("\n===== DMA FILTER PASSED =====")
 print(f"Total: {len(dma_filtered_symbols)}")
 
-#################################
+#########################################################
 print("dma_filtered_stocks :",len(dma_filtered_symbols))
 print("min_week_stocks :",len(min_week_stocks))
 print("min_depth_stocks :",len(min_depth_stocks))
 print("duration_stocks :",len(duration_stocks))
 print("near_high_stocks :",len(near_high_stocks))
 
-#################################
+#########################################################
 
 
 print("\n===== CUP PATTERN STOCKS =====")

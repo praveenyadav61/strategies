@@ -5,7 +5,7 @@ from datetime import datetime
 
 class DataLoader:
 
-    def __init__(self, provider, data_dir="data/daily"):
+    def __init__(self, provider, data_dir="data/market_data"):
         self.provider = provider
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
@@ -50,28 +50,31 @@ class DataLoader:
             df = pd.concat([existing_df, df_new])
             df = df[~df.index.duplicated(keep="last")]
         # -------------------------
-        # Clean & Validate
+        # Data Cleaning
         # -------------------------
-        # print(f"data for {symbol} has {len(df)} rows after update")
-        # print(df.tail())
-        # df.index = pd.to_datetime(df.index)
 
-        # Fix yfinance multiindex columns
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        # Ensure datetime index
+        df.index = pd.to_datetime(df.index)
 
-        missing = set(REQUIRED_COLUMNS) - set(df.columns)
-        if missing:
-            raise ValueError(f"{symbol} missing columns {missing}")
-
-        df = df[REQUIRED_COLUMNS]
-
-        df.index.name = "Date"
+        # Sort index
         df.sort_index(inplace=True)
-        df.to_parquet(file_path, engine="pyarrow")
 
-        print(f"Saved {symbol}")
+        # Remove rows where price data is missing (Yahoo placeholders)
+        df = df.dropna(subset=["Open", "High", "Low", "Close"])
 
+        # Remove rows where volume is NaN
+        df = df.dropna(subset=["Volume"])
+
+        # Remove duplicate dates
+        df = df[~df.index.duplicated(keep="last")]
+
+        # Remove future placeholder rows (sometimes Yahoo sends them)
+        today_ts = pd.Timestamp.today().normalize()
+        df = df[df.index <= today_ts]
+
+        # Clip dataset to last valid trading candle
+        last_valid = df["Close"].last_valid_index()
+        df = df.loc[:last_valid]
     def update_universe(self, symbols, start_date="2014-01-01"):
         for symbol in symbols:
             try:
