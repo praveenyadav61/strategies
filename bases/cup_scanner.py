@@ -22,7 +22,7 @@ min_week_stocks=[]
 min_depth_stocks=[]
 duration_stocks=[]
 near_high_stocks=[]
-
+results = []
 ################################################
 
 # ===============================
@@ -30,7 +30,6 @@ near_high_stocks=[]
 # ===============================
 
 def dma_filter(df):
-
     ema200 = df["close"].ewm(span=200, adjust=False).mean()
     ema50 = df["close"].ewm(span=50, adjust=False).mean()
 
@@ -66,12 +65,94 @@ def compute_atr(df, window):
     atr = tr.rolling(window).mean()
     return atr
 
-def detect_cup(df,stock):
-    print("yes")
-    if len(df) < MAX_WEEKS:
+
+
+def has_prior_uptrend(df, base_start_idx,
+                     left_high,
+                     bottom_price,
+                     lookback=12,
+                     k=1.5,
+                     min_floor=0.25,
+                     width=None):
+    """
+    Params:
+    - df: OHLC dataframe
+    - base_start_idx: index (int, NOT date)
+    - left_high: price at start of base
+    - bottom_price: cup bottom price
+    - lookback: candles before base
+    - k: multiplier for depth-based return
+    - min_floor: minimum return (e.g. 25%)
+    - width: base width (optional, in candles)
+    """
+
+    # Step 1: define window
+    start = max(0, base_start_idx - lookback)
+    window = df.iloc[start:base_start_idx]
+
+    if len(window) < 2:
         return False
+
+    # Step 2: compute depth %
+    depth_pct = (left_high - bottom_price) / left_high
+
+    # Step 3: adaptive min return
+    min_return = max(min_floor, k * depth_pct)
+
+    # Optional width adjustment
+    if width is not None and width > 12:
+        min_return += 0.05
+
+    # Step 4: compute return
+    start_price = window["Low"].min()
+    end_price = left_high
+
+    ret = (end_price - start_price) / start_price
+
+    return ret >= min_return
+
+def find_pivot(df, left_high, bottom_idx, bottom_price,
+               depth_pct=0.2,
+               pullback_pct=0.05,
+               lookahead=4):
+    # Step 0: cup bottom price
+    # bottom_price = df.loc[bottom_idx, "Low"]
+    # bottom_idx = df.index.get_loc(bottom_idx)
+    # print("yes5", left_high, bottom_price, bottom_idx)
+
+    # Step 2: pivot threshold
+    pivot_threshold = left_high - depth_pct * (depth := left_high - bottom_price)
+    pivot = None
+    pivot_idx = None
+    # print("yes6", len(df), lookahead, bottom_idx)
+    # Step 3: scan right side
+
+    for i in range(bottom_idx + 1, len(df) - lookahead):
+
+        curr_high = df.iloc[i]["High"]
+
+        if curr_high < pivot_threshold:
+            continue
+
+        if not (curr_high > df.iloc[i-1]["High"] and curr_high > df.iloc[i+1]["High"]):
+            continue
+
+        future_lows = df.iloc[i+1:i+1+lookahead]["Low"]
+        min_future_low = future_lows.min()
+
+        drop = (curr_high - min_future_low) / curr_high
+
+        if drop >= pullback_pct:
+            pivot = curr_high
+            pivot_idx = i   # keep updating → most recent wins
+
+    return pivot, pivot_idx
+
+def detect_cup(df,stock):
+    
+    # if len(df) < MAX_WEEKS:
+    #     return False
     window = df[-MAX_WEEKS:]
-    print("last closing price :",window['Close'].iloc[-1])
     # Peak must occur before the last MIN_WEEKS
     peak_search_window = window.iloc[:-MIN_WEEKS]
 
@@ -79,7 +160,7 @@ def detect_cup(df,stock):
     peak_price = window.loc[peak_idx, 'High']
 
     after_peak = window.loc[peak_idx:]
-    print(f"{stock} - Peak at {peak_price} on {peak_idx.date()}, Weeks after peak: {len(after_peak)}")
+    # print(f"{stock} - Peak at {peak_price} on {peak_idx.date()}, Weeks after peak: {len(after_peak)}")
     if len(after_peak) < MIN_WEEKS:
         return False
     #################################
@@ -94,17 +175,21 @@ def detect_cup(df,stock):
     #################################
     min_depth_stocks.append(stock)
     #################################
-    duration = (bottom_idx - peak_idx).days / 7
-    if duration < MIN_WEEKS:
-        return False
-    #################################
-    duration_stocks.append(stock)
-    #################################
+    # duration = (bottom_idx - peak_idx).days / 7
+    # if duration < MIN_WEEKS:
+    #     return False
+    # #################################
+    # duration_stocks.append(stock)
+    # #################################
 
     current_price = window['Close'].iloc[-1]
-    near_high = abs(current_price - peak_price) / (peak_price - bottom_price)
-    if near_high > NEAR_HIGH_THRESHOLD:
+    near_high = (peak_price -current_price) / (peak_price - bottom_price)
+    if near_high > NEAR_HIGH_THRESHOLD or near_high < -0.2:
         return False
+
+    # near_high = abs(current_price - peak_price) / (peak_price - bottom_price)
+    # if near_high > NEAR_HIGH_THRESHOLD:
+    #     return False
     #################################
     near_high_stocks.append(stock)
     #################################
@@ -120,7 +205,39 @@ def detect_cup(df,stock):
     
     # if recent_atr.mean() > window['ATR'].mean():
     #     return False
+    ##################PIVOT####################################
 
+    bottom_idx1 = df.index.get_loc(bottom_idx)
+    is_uptrend = has_prior_uptrend(df,base_start_idx=peak_idx,left_high=peak_price,bottom_price=bottom_price,width=None)
+
+    # print("yess2")
+    pivot, pivot_idx = find_pivot(window, peak_price, bottom_idx, bottom_price)
+    # print("yesssssssssssss")
+    if pivot is not None:
+        depth = peak_price - bottom_price
+        result = {
+            "symbol": stock,
+            "left_high": peak_price,
+            "pivot": pivot,
+            "pivot_date": window.index[pivot_idx],
+            # "pivot_date": df.loc[pivot_idx, "date"] if "date" in df.columns else pivot_idx,
+            "depth": depth,
+            "distance_to_pivot_pct": (pivot - current_price) / pivot,
+            "near_breakout": current_price >= 0.9 * pivot
+        }
+        results.append(result)
+    # else:
+    #     results.append({
+    #         "symbol": stock,
+    #         "left_high": peak_price,
+    #         "pivot": None,
+    #         "pivot_date": None,
+    #         "depth": depth,
+    #         "distance_to_pivot_pct": None,
+    #         "near_breakout": False
+    #     })
+
+    ###########################################################
     return True
 
 
@@ -171,6 +288,10 @@ for file in files:
 
         if detect_cup(weekly,stock):
             cup_stocks.append(stock)
+        # Convert to DataFrame
+        result_df = pd.DataFrame(results)
+        # Save to Excel
+        result_df.to_excel("pivot_stocks.xlsx", index=False)
 
     except Exception as e:
         print(f"Error in {file}: {e}")
@@ -189,8 +310,15 @@ print(f"Total: {len(dma_filtered_symbols)}")
 print("dma_filtered_stocks :",len(dma_filtered_symbols))
 print("min_week_stocks :",len(min_week_stocks))
 print("min_depth_stocks :",len(min_depth_stocks))
-print("duration_stocks :",len(duration_stocks))
+# print("duration_stocks :",len(duration_stocks))
 print("near_high_stocks :",len(near_high_stocks))
+
+# print("dma_filtered_stocks :",dma_filtered_symbols)
+# print("min_week_stocks :",min_week_stocks)
+# print("min_depth_stocks :",min_depth_stocks)
+# # print("duration_stocks :",duration_stocks)
+# print("near_high_stocks :",near_high_stocks)
+
 
 #########################################################
 
