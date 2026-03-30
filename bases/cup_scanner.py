@@ -7,12 +7,12 @@ from glob import glob
 # ======== PARAMETERS ===========
 # ===============================
 
-DATA_FOLDER = "data/test_data"   # your folder
+DATA_FOLDER = "data/daily"   # your folder
 MIN_WEEKS = 8                      # minimum base duration 40
-MAX_WEEKS = 52                     # maximum base duration
+MAX_WEEKS = 104                     # maximum base duration
 MIN_DEPTH = 0.15                   # 15%
 MAX_DEPTH = 0.60                   # 40%
-NEAR_HIGH_THRESHOLD = 0.4          # above 60% of depth
+NEAR_HIGH_THRESHOLD = 0.6          # above 60% of depth
 ATR_WINDOW = 14
 COMPRESSION_LOOKBACK = 10
 

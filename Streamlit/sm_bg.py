@@ -24,10 +24,10 @@ default_params = {
     }
 
 
-data_path = '../data/daily/'
+data_path = '../data/test_data/'
 # Corrected path for Streamlit execution context
 if not os.path.exists(data_path):
-    data_path = 'data/daily/'
+    data_path = 'data/test_data/'
 def run_full_scan(params=default_params):
     all_files = [f for f in os.listdir(data_path) if f.endswith('.parquet')]
     all_stocks_conditions = []
@@ -53,14 +53,15 @@ def run_full_scan(params=default_params):
 
             close = df_tail["Close"]
 
-            sma200 = close.rolling(200).mean()
-            sma50 = close.rolling(50).mean()
+            ema200 = df["close"].ewm(span=200, adjust=False).mean()
+            ema50 = df["close"].ewm(span=50, adjust=False).mean()
 
             last_close = close.iloc[-1]
-            last_sma200 = sma200.iloc[-1]
-            last_sma50 = sma50.iloc[-1]
-
-            if not (last_close > last_sma200 and last_sma50 > last_sma200):
+            last_ema200 = ema200.iloc[-1]
+            last_ema50 = ema50.iloc[-1]
+            print(f"Processing {symbol}: Last Close={last_close}, EMA200={last_ema200}, EMA50={last_ema50}")
+            if not (last_close > last_ema200 and last_ema50 > last_ema200):
+                print(f"Skipping {symbol} due to DMA filter")
                 continue
             data_engine = DataEngine()
             df = data_engine.get_symbol(symbol)
@@ -108,18 +109,22 @@ def check_cup_conditions(df, params):
 
     latest = df.iloc[-1]
 
-    # Condition from base_formation: Uptrend
-    if 'ma_40' not in df.columns or 'ma_10' not in df.columns or pd.isna(latest['ma_40']) or pd.isna(latest['ma_10']):
-        return None
-    trend_condition = (
-        latest['Close'] > latest['ma_40'] and
-        latest['ma_10'] > latest['ma_40']
-    )
+    # # Condition from base_formation: Uptrend
+    # if 'ma_40' not in df.columns or 'ma_10' not in df.columns or pd.isna(latest['ma_40']) or pd.isna(latest['ma_10']):
+    #     return None
+    # trend_condition = (
+    #     latest['Close'] > latest['ma_40'] and
+    #     latest['ma_10'] > latest['ma_40']
+    # )
 
     window = df[-MAX_WEEKS:].copy()
     
-    peak_idx = window['High'].idxmax()
+    peak_search_window = window.iloc[:-MIN_WEEKS]
+
+    peak_idx = peak_search_window['High'].idxmax()
     peak_price = window.loc[peak_idx, 'High']
+
+    after_peak = window.loc[peak_idx:]
 
     after_peak = window.loc[peak_idx:]
     if len(after_peak) < MIN_WEEKS:
@@ -144,7 +149,7 @@ def check_cup_conditions(df, params):
 
     # Condition 3: Recovery (from base_formation)
     current_price = window['Close'].iloc[-1]
-    recovery_level = current_price / peak_price if peak_price > 0 else 0
+    recovery_level = (current_price - bottom_price) / (peak_price - bottom_price) if (peak_price - bottom_price) > 0 else 0
     recovery_ok = RECOVERY_MIN <= recovery_level <= RECOVERY_MAX
 
     # Condition 4: Volatility Compression (from original sm_bg.py, kept for reference)
@@ -157,7 +162,7 @@ def check_cup_conditions(df, params):
             compression_ok = True
     
     conditions = {
-        "Uptrend": trend_condition,
+        # "Uptrend": trend_condition,
         f"Depth ({MIN_DEPTH:.0%}-{MAX_DEPTH:.0%})": depth_ok,
         f"Duration (>{MIN_WEEKS}w)": duration_ok,
         "Rounded Bottom": rounded_condition,
@@ -167,7 +172,7 @@ def check_cup_conditions(df, params):
     
     return conditions
 
-def calculate_cup_metrics(df, params):
+def calculate_cup_metrics(df, params=default_params):
     df = df.copy()
     df = df.loc[:,~df.columns.duplicated()]
     
@@ -247,5 +252,4 @@ def plot_cup_formation_smbg(df_weekly, symbol, params):
     fig.update_yaxes(title_text="Volume", row=2, col=1)
 
     return fig
-
 run_full_scan()
