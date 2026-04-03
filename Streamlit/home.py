@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import os
-from Data_transformation import read_data
-from VCP_Scanner import run_vcp_scanner
-from sm_bg import run_full_scan, plot_cup_formation_smbg
-from base_formation import run_full_scan_base
+# from Data_transformation import read_data
+# from VCP_Scanner import run_vcp_scanner
+# from sm_bg import run_full_scan, plot_cup_formation_smbg
+# from base_formation import run_full_scan_base
+from modular_base_scanner import CupScanner
 from chart_plot import plot_cup_formation
 
 
@@ -55,8 +56,11 @@ elif page == "Base Formation":
         'COMPRESSION_LOOKBACK': compression_lookback,
     }
 
+    # if st.sidebar.button("Run Scan"):
+    #     st.session_state.base_scan_results = run_full_scan_base(params)
     if st.sidebar.button("Run Scan"):
-        st.session_state.base_scan_results = run_full_scan_base(params)
+        scanner = CupScanner(params, debug=False)
+        st.session_state.base_scan_results = scanner.run_scan()
 
     if 'base_scan_results' in st.session_state:
         bulk_df = st.session_state.base_scan_results
@@ -74,7 +78,8 @@ elif page == "Base Formation":
                     display_df['Market Cap (Cr)'] = (display_df['marketCap'] / 1_00_00_000).round(0)
 
                 # Define the desired column order as requested
-                metrics_to_front = ['Tight Groups', 'Depth', 'Recovery']
+                # metrics_to_front = ['Tight Groups', 'Depth', 'Recovery']
+                metrics_to_front = ['Tight Groups', 'Depth', 'Recovery', 'prior_uptrend', 'pivot']
                 bulk_df_cols = [col for col in bulk_df.columns if col not in ['Symbol'] + metrics_to_front]
                 static_cols_to_show = ['longName', 'industry', 'sector', 'Market Cap (Cr)']
 
