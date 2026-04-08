@@ -31,6 +31,8 @@ min_week_stocks=[]
 min_depth_stocks=[]
 duration_stocks=[]
 near_high_stocks=[]
+prior_uptrend_stocks=[]
+pivot_stocks=[]
 # ===============================
 
 def calculate_cup_metrics(df, params, symbol):
@@ -177,6 +179,7 @@ def run_full_scan_base(params=default_params):
             if all(all_but_last_conditions):
                 stock_condition = {'Symbol': symbol}
                 stock_condition.update(metrics)
+
                 stock_condition.update(conditions)
                 all_stocks_conditions.append(stock_condition)
                 cup_stocks.append(symbol)
@@ -210,6 +213,85 @@ def run_full_scan_base(params=default_params):
 #     df['rsi_14'] = 100 - (100 / (1 + rs))
 
 #     return df
+
+# ================================
+# PRIOR UPTREND 
+# ================================
+def has_prior_uptrend(df, base_start_idx,
+                     left_high,
+                     bottom_price,
+                     lookback=12,
+                     k=1.5,
+                     min_floor=0.25,
+                     width=None):
+    """
+    Params:
+    - df: OHLC dataframe
+    - base_start_idx: index (int, NOT date)
+    - left_high: price at start of base
+    - bottom_price: cup bottom price
+    - lookback: candles before base
+    - k: multiplier for depth-based return
+    - min_floor: minimum return (e.g. 25%)
+    - width: base width (optional, in candles)
+    """
+    # Step 1: define window
+
+    start = max(0, base_start_idx - lookback)
+    window = df.iloc[start:base_start_idx]
+
+    if len(window) < 2:
+        return False
+
+    # Step 2: compute depth %
+    depth_pct = (left_high - bottom_price) / left_high
+
+    # Step 3: adaptive min return
+    min_return = max(min_floor, k * depth_pct)
+
+    # Optional width adjustment
+    if width is not None and width > 12:
+        min_return += 0.05
+
+    # Step 4: compute return
+    start_price = window["Low"].min()
+    end_price = left_high
+    ret = (end_price - start_price) / start_price
+    return ret >= min_return
+
+# ================================
+# PIVOT POINT DETECTION
+# ================================
+def find_pivot(symbol, df, left_high, bottom_idx, bottom_price,
+               depth_pct=0.2,
+               pullback_pct=0.05,
+               lookahead=4):
+    # print("Finding pivot for {symbol} with left_high {left_high} and bottom_price {bottom_price}", symbol, left_high, bottom_price)
+    pivot_threshold = left_high - depth_pct * (depth := left_high - bottom_price)
+    pivot = None
+    pivot_idx = None
+
+    for i in range(bottom_idx + 1, len(df) - lookahead):
+
+        curr_high = df.iloc[i]["High"]
+
+        if curr_high < pivot_threshold:
+            continue
+
+        if not (curr_high > df.iloc[i-1]["High"] and curr_high > df.iloc[i+1]["High"]):
+            continue
+
+        future_lows = df.iloc[i+1:i+1+lookahead]["Low"]
+        min_future_low = future_lows.min()
+
+        drop = (curr_high - min_future_low) / curr_high
+
+        if drop >= pullback_pct:
+            pivot = curr_high
+            pivot_idx = i   # keep updating → most recent wins
+    print("pivot for {symbol} is {pivot} at {pivot_idx}",symbol, pivot, pivot_idx)
+    return pivot, pivot_idx
+
 
 
 # ===============================
@@ -257,6 +339,7 @@ def check_cup_conditions(df, params, symbol):
         return None, None
     #################################
     duration_stocks.append(symbol)
+    # print(f"Passed duration filter for {symbol} with duration {duration:.1f} weeks")
     #################################
     # Condition from base_formation: Rounded Bottom
     near_low_weeks = after_peak[
@@ -289,13 +372,26 @@ def check_cup_conditions(df, params, symbol):
     # fetch RSI
     # df_rsi=calculate_weekly_metrics(df)
     # latest_rsi = df_rsi['rsi_14'].iloc[-1]
+
+    #condition 5 : prior uptrend
+    bottom_idx1 = df.index.get_loc(bottom_idx)
+    peak_idx1= df.index.get_loc(peak_idx)
+    prior_uptrend = has_prior_uptrend(df,peak_idx1,left_high=peak_price,bottom_price=bottom_price,width=None)
+    if prior_uptrend:
+        prior_uptrend_stocks.append(symbol)
+    #condition 6: pivot point
+    pivot, pivot_idx = find_pivot(symbol, window, peak_price, bottom_idx1, bottom_price)
+    if pivot:
+        pivot_stocks.append(symbol)
     conditions = {
         f"Depth ({MIN_DEPTH:.0%}-{MAX_DEPTH:.0%})": depth_ok,
         f"Duration (>{MIN_WEEKS}w)": duration_ok,
         # "3-Week Tight Close": tight_closes_ok,
         # "Rounded Bottom": rounded_condition,
         f"Recovery ({RECOVERY_MIN:.0%}-{RECOVERY_MAX:.0%})": recovery_ok,
-        "Volatility Compressed": compression_ok 
+        "Volatility Compressed": compression_ok ,
+        "prior uptrand" : prior_uptrend,
+        f"pivot" : pivot
     }
     metrics = {
         "Depth": depth,
@@ -394,5 +490,10 @@ if __name__ == "__main__":
     print("min_depth_stocks :",len(min_depth_stocks))
     print("duration_stocks :",len(duration_stocks))
     print("near_high_stocks :",len(near_high_stocks))
+    print("prior_uptrend_Stocks :", len(prior_uptrend_stocks))
+    print("pivot_stocks :",len(pivot_stocks))
+    # print("near high stocks :", near_high_stocks)
+    # print("prior_uptrend_stocks: ", prior_uptrend_stocks)
+    # print("pivot_stocks :",pivot_stocks)
 
-    #########################################################
+    ##########################################################

@@ -1,83 +1,94 @@
 import os
 import pandas as pd
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class DataLoader:
 
-    def __init__(self, provider, data_dir="data/market_data"):
+    def __init__(self, provider, data_dir="data/daily1", max_workers=6):
         self.provider = provider
         self.data_dir = data_dir
+        self.max_workers = max_workers
         os.makedirs(self.data_dir, exist_ok=True)
 
     def get_file_path(self, symbol):
         return os.path.join(self.data_dir, f"{symbol}.parquet")
 
-    def update_symbol(self, symbol, start_date="2014-01-01"):
+    def clean_df(self, df):
+        df = df[["Open", "High", "Low", "Close", "Volume"]]
+        df = df.dropna(subset=["Close"])
+        df = df[~df.index.duplicated(keep="last")]
+        df.sort_index(inplace=True)
+        df.index.name = "Date"
+        return df
 
-        REQUIRED_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
+    def update_symbol(self, symbol, start_date="2014-01-01"):
 
         file_path = self.get_file_path(symbol)
         today = datetime.today().strftime("%Y-%m-%d")
 
-        # -------------------------
-        # First time download
-        # -------------------------
-        if not os.path.exists(file_path):
-            print(f"Downloading full data for {symbol}")
-            df = self.provider.fetch_data(symbol, start_date, today)
-            if df.empty:
-                print(f"No data returned for {symbol}")
-                return
+        try:
+            # First time
+            if not os.path.exists(file_path):
+                df = self.provider.fetch_data(symbol, start=start_date, end=today)
 
-        # -------------------------
-        # Incremental update
-        # -------------------------
-        else:
+                if df.empty:
+                    return {"symbol": symbol, "status": "no_data"}
 
-            print(f"Updating {symbol}")
-            existing_df = pd.read_parquet(file_path, engine="pyarrow")
+            else:
+                existing = pd.read_parquet(file_path)
 
-            last_date = existing_df.index[-1]
-            new_start = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                last_date = existing.index[-1]
+                new_start = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
-            df_new = self.provider.fetch_data(symbol, new_start, today)
+                # 🔥 Hybrid fetch
+                df_new = self.provider.fetch_data(symbol, period="2mo")
 
-            if df_new.empty:
-                print(f"No new data for {symbol}")
-                return
+                # fallback if needed
+                if df_new.empty or df_new.index.max() <= last_date:
+                    df_new = self.provider.fetch_data(symbol, start=new_start, end=today)
 
-            df = pd.concat([existing_df, df_new])
-            df = df[~df.index.duplicated(keep="last")]
-        # -------------------------
-        # Data Cleaning
-        # -------------------------
+                if df_new.empty:
+                    return {"symbol": symbol, "status": "no_update"}
 
-        # Ensure datetime index
-        df.index = pd.to_datetime(df.index)
+                df = pd.concat([existing, df_new])
 
-        # Sort index
-        df.sort_index(inplace=True)
+            df = self.clean_df(df)
+            df.to_parquet(file_path)
 
-        # Remove rows where price data is missing (Yahoo placeholders)
-        df = df.dropna(subset=["Open", "High", "Low", "Close"])
+            return {
+                "symbol": symbol,
+                "status": "updated",
+                "latest": str(df.index[-1].date())
+            }
 
-        # Remove rows where volume is NaN
-        df = df.dropna(subset=["Volume"])
+        except Exception as e:
+            return {"symbol": symbol, "status": "error"}
 
-        # Remove duplicate dates
-        df = df[~df.index.duplicated(keep="last")]
+    def update_universe(self, symbols):
+        total = len(symbols)
+        completed = 0
+        results = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = [executor.submit(self.update_symbol, s) for s in symbols]
 
-        # Remove future placeholder rows (sometimes Yahoo sends them)
-        today_ts = pd.Timestamp.today().normalize()
-        df = df[df.index <= today_ts]
+            for future in as_completed(futures):
+                result = future.result()
+                results.append(result)
+                print(f"Updated {result['symbol']}: {result['status'], result['latest'] }", end=" | ")
+                completed += 1
+                percent = (completed / total) * 100
 
-        # Clip dataset to last valid trading candle
-        last_valid = df["Close"].last_valid_index()
-        df = df.loc[:last_valid]
-    def update_universe(self, symbols, start_date="2014-01-01"):
-        for symbol in symbols:
-            try:
-                self.update_symbol(symbol, start_date)
-            except Exception as e:
-                print(f"Error with {symbol}: {e}")
+                if completed % 20 == 0 or completed == total:
+                    print(f"Progress: {completed}/{total} ({percent:.1f}%)", end="\r")
+
+        print()
+
+        updated = sum(1 for r in results if r["status"] == "updated")
+        failed = sum(1 for r in results if r["status"] == "error")
+
+        print(f"Updated: {updated}")
+        print(f"Failed: {failed}")
+
+        return results
