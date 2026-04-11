@@ -175,8 +175,8 @@ elif page == "Bulk_Block_Deal":
     st.info("This scanner identifies stocks with significant bulk block deals.")
     bulk_df= pd.read_parquet('data/deals_data/bulk_deals.parquet')
     block_df= pd.read_parquet('data/deals_data/block_deals.parquet')
-    bulk_df['Symbol']= bulk_df['Symbol'].apply(normalize_symbol_for_deals())
-    block_df['Symbol']= block_df['Symbol'].apply(normalize_symbol_for_deals())
+    # bulk_df['Symbol']= bulk_df['Symbol'].apply(normalize_symbol_for_deals())
+    # block_df['Symbol']= block_df['Symbol'].apply(normalize_symbol_for_deals())
     display_df = bulk_df.merge(static_df, left_on='Symbol', right_on='symbol', how='left')
 
     # Convert Market Cap to Crores for better readability and sorting
