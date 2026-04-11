@@ -9,9 +9,9 @@ from glob import glob
 
 DATA_FOLDER = "data/daily"   # your folder
 MIN_WEEKS = 8                      # minimum base duration 40
-MAX_WEEKS = 104                     # maximum base duration
+MAX_WEEKS = 52                     # maximum base duration
 MIN_DEPTH = 0.15                   # 15%
-MAX_DEPTH = 0.60                   # 40%
+MAX_DEPTH = 0.40                   # 40%
 NEAR_HIGH_THRESHOLD = 0.6          # above 60% of depth
 ATR_WINDOW = 14
 COMPRESSION_LOOKBACK = 10
@@ -317,7 +317,7 @@ print("near_high_stocks :",len(near_high_stocks))
 # print("min_week_stocks :",min_week_stocks)
 # print("min_depth_stocks :",min_depth_stocks)
 # # print("duration_stocks :",duration_stocks)
-# print("near_high_stocks :",near_high_stocks)
+print("near_high_stocks :",near_high_stocks)
 
 
 #########################################################

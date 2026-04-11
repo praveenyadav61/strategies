@@ -7,7 +7,7 @@ import numpy as np
 # 🔧 PARAMETERS
 # =========================
 PARAMS = {
-    "ema21_buffer": 0.97,
+    "ema21_buffer": 1,
 
     "z10_max": 1.2,
     "z21_max": 1.4,
@@ -157,6 +157,11 @@ class EMAScanner:
             if df is None or len(df) < 100:
                 continue
 
+            #custom dates
+            df = df.loc["2023-01-01":"2023-06-15"]
+            if df.empty:
+                continue
+
             df = self.add_ema(df)
             latest = df.iloc[-1]
 
@@ -260,5 +265,5 @@ if __name__ == "__main__":
         print("\nTop Results:")
         print(df.head(15))
 
-        df.to_csv("ema_momentum_results.csv", index=False)
+        df.to_csv("ema_trend_follower_olddata.csv", index=False)
         print("\nSaved to ema_momentum_results.csv")
