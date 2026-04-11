@@ -1,0 +1,36 @@
+name: Daily Data Update
+
+on:
+  schedule:
+    - cron: "0 13 * * 1-5"   # 6:30 PM IST (weekdays)
+  workflow_dispatch:         # optional manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo (dev branch)
+        uses: actions/checkout@v3
+        with:
+          ref: dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run data update script
+        run: python data_layer/daily_data_loader.py
+
+      - name: Commit & push changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git pull origin dev
+          git add data/
+          git diff --cached --quiet || git commit -m "Auto update data"
+          git push origin dev
