@@ -1,12 +1,21 @@
 import streamlit as st
 import pandas as pd
 import os
+import sys
+from pathlib import Path
 # from Data_transformation import read_data
 # from VCP_Scanner import run_vcp_scanner
 # from sm_bg import run_full_scan, plot_cup_formation_smbg
 # from base_formation import run_full_scan_base
 from modular_base_scanner import CupScanner
-from chart_plot import plot_cup_formation
+from chart_plot import plot_cup_formation, plot_trend_follower_chart
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from trend_follower.final_trend_follower import EMAScanner
 
 
 def normalize_symbol_for_deals(symbol):
@@ -15,6 +24,29 @@ def normalize_symbol_for_deals(symbol):
     usually store them as `ABC`. Normalize once so both sources can be matched.
     """
     return str(symbol).replace(".NS", "").strip().upper()
+
+
+def load_daily_price_data(symbol):
+    """Load a daily parquet file and normalize the date index."""
+    data_candidates = [
+        ROOT_DIR / "data" / "daily" / f"{symbol}.parquet",
+        Path("data/daily") / f"{symbol}.parquet",
+        Path("../data/daily") / f"{symbol}.parquet",
+    ]
+
+    for path in data_candidates:
+        if path.exists():
+            daily_df = pd.read_parquet(path)
+            if isinstance(daily_df.columns, pd.MultiIndex):
+                daily_df.columns = daily_df.columns.get_level_values(0)
+            if "Date" in daily_df.columns:
+                daily_df["Date"] = pd.to_datetime(daily_df["Date"])
+                daily_df.set_index("Date", inplace=True)
+            elif not isinstance(daily_df.index, pd.DatetimeIndex):
+                daily_df.index = pd.to_datetime(daily_df.index)
+            return daily_df.sort_index()
+
+    raise FileNotFoundError(f"Could not find daily data for {symbol}")
 
 # st.set_page_config(layout="wide")
 ## data read
@@ -27,7 +59,7 @@ page = st.sidebar.radio("Choose a page", ["Home", "Base Formation","Bulk_Block_D
 m_cap =st.sidebar.number_input("Market Cap Filter (in Crores)", min_value=10, value=1000, step=1000000000)
 if page == "Home":
     st.header("Stock Analysis")
-    st.write("Welcome! Developed by Praveen nd Team.")
+    st.write("Welcome!!! Please select a scanner from the sidebar to get started.")
     
 
 
@@ -203,3 +235,98 @@ elif page == "Bulk_Block_Deal":
 elif page == "Trend_Follower":
     st.title("Trend Follower Scanner")
     st.info("This scanner identifies stocks that are currently in a strong uptrend.")
+
+    st.sidebar.header("Trend Follower")
+    trend_results_path = ROOT_DIR / "ema_trend_follower.csv"
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        run_scan = st.button("Run Trend Scan")
+    with col2:
+        load_latest = st.button("Load Saved Results")
+
+    if run_scan:
+        with st.spinner("Running trend follower scan..."):
+            scanner = EMAScanner(str(ROOT_DIR / "data" / "daily"))
+            st.session_state.trend_scan_results = scanner.scan()
+            st.session_state.trend_scan_results_source = "live"
+
+    if load_latest and trend_results_path.exists():
+        st.session_state.trend_scan_results = pd.read_csv(trend_results_path)
+        st.session_state.trend_scan_results_source = "saved"
+
+    if "trend_scan_results" not in st.session_state and trend_results_path.exists():
+        st.session_state.trend_scan_results = pd.read_csv(trend_results_path)
+        st.session_state.trend_scan_results_source = "saved"
+
+    if "trend_scan_results" not in st.session_state:
+        st.warning("No trend follower results available yet. Run the scan or load the saved results.")
+    else:
+        trend_df = st.session_state.trend_scan_results.copy()
+
+        if trend_df.empty:
+            st.warning("No stocks matched the trend follower criteria.")
+        else:
+            display_df = trend_df.merge(static_df, left_on="symbol", right_on="symbol", how="left")
+
+            if "marketCap" in display_df.columns:
+                display_df["Market Cap (Cr)"] = (display_df["marketCap"] / 1_00_00_000).round(0)
+                display_df = display_df[display_df["Market Cap (Cr)"] >= m_cap]
+
+            preferred_cols = [
+                "symbol",
+                "longName",
+                "sector",
+                "industry",
+                "Market Cap (Cr)",
+                "followers",
+                "close",
+                "crossover_10_20",
+                "duration_ema10",
+                "duration_ema21",
+                "efficiency",
+                "dist_ema10",
+                "dist_ema21",
+                "slope_ema10",
+                "slope_ema21",
+                "z_ema10",
+                "z_ema21",
+            ]
+            display_cols = [col for col in preferred_cols if col in display_df.columns]
+            display_df = display_df[display_cols]
+            display_df = display_df.sort_values(
+                by=["efficiency", "duration_ema10", "duration_ema21"],
+                ascending=[False, False, False],
+            )
+
+            source_label = st.session_state.get("trend_scan_results_source", "saved")
+            st.caption(f"Showing {len(display_df)} trend follower candidates from {source_label} results.")
+
+            event = st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+            )
+
+            if event.selection.rows:
+                selected_row_index = event.selection.rows[0]
+                selected_row = display_df.iloc[selected_row_index]
+                selected_symbol = selected_row["symbol"]
+
+                st.subheader(f"Trend Follower Chart for {selected_symbol}")
+
+                try:
+                    daily_df = load_daily_price_data(selected_symbol)
+                    fig = plot_trend_follower_chart(daily_df, selected_symbol, result_row=selected_row)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    static_info = static_df[static_df["symbol"] == selected_symbol].dropna(axis=1, how="all")
+                    if not static_info.empty:
+                        st.write("Company Information")
+                        st.dataframe(static_info, use_container_width=True, hide_index=True)
+                except FileNotFoundError:
+                    st.error(f"Could not find data file for {selected_symbol}.")
+                except Exception as e:
+                    st.error(f"An error occurred while plotting {selected_symbol}: {e}")

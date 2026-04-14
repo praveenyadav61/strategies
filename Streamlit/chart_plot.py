@@ -73,49 +73,43 @@ def get_cup_reference_points(df, params):
     }
 
 
-class LayeredCupChart:
+class LayeredPriceChart:
     """
-    Build a Plotly chart one layer at a time.
+    Generic layered price chart builder.
 
-    Typical usage:
-        chart = LayeredCupChart(weekly_df, symbol, params)
-        fig = (
-            chart
-            .add_candles()
-            .add_price_moving_averages()
-            .add_peak_low_markers()
-            .add_volume_bars()
-            .add_volume_moving_averages()
-            .finalize()
-        )
+    Use this for any multi-row price chart that combines candles, moving averages,
+    volume, and optional indicator layers.
     """
 
     def __init__(
         self,
-        df_weekly,
+        df,
         symbol,
-        params=None,
+        rows=3,
         row_heights=None,
         vertical_spacing=0.05,
     ):
-        self.params = params or default_params
         self.symbol = symbol
-        self.df = prepare_weekly_chart_data(df_weekly, self.params, symbol)
+        self.df = df.copy()
+        self.rows = rows
 
-        # Use 3 rows up front so we can keep adding layers without rebuilding the chart.
-        # Row 1: price
-        # Row 2: volume
-        # Row 3: momentum / future indicators
+        if row_heights is None:
+            if rows == 2:
+                row_heights = [0.75, 0.25]
+            elif rows == 3:
+                row_heights = [0.6, 0.2, 0.2]
+            else:
+                row_heights = [1.0 / rows] * rows
+
         self.fig = make_subplots(
-            rows=3,
+            rows=rows,
             cols=1,
             shared_xaxes=True,
             vertical_spacing=vertical_spacing,
-            row_heights=row_heights or [0.6, 0.2, 0.2],
+            row_heights=row_heights,
         )
 
-    def add_candles(self, row=1, col=1, name="Weekly Price"):
-        """Base price layer. Start with this before adding overlays."""
+    def add_candles(self, row=1, col=1, name="Price"):
         self.fig.add_trace(
             go.Candlestick(
                 x=self.df.index,
@@ -136,11 +130,6 @@ class LayeredCupChart:
         col=1,
         ma_columns=None,
     ):
-        """
-        Add price moving averages on top of the candle chart.
-
-        `ma_columns` lets you extend this later without touching the method body.
-        """
         ma_columns = ma_columns or [
             ("ma_10", "10W MA", "orange"),
             ("ma_40", "40W MA", "blue"),
@@ -160,13 +149,177 @@ class LayeredCupChart:
                 )
         return self
 
-    def add_peak_low_markers(self, row=1, col=1):
-        """
-        Add the cup reference levels.
+    def add_ema_lines(
+        self,
+        row=1,
+        col=1,
+        ma_columns=None,
+    ):
+        ma_columns = ma_columns or [
+            ("ema10", "EMA 10", "#f59e0b"),
+            ("ema20", "EMA 20", "#2563eb"),
+        ]
 
-        Keep this separate from the candle layer so the chart can be used with or
-        without pattern annotations.
-        """
+        for column, label, color in ma_columns:
+            if column in self.df.columns:
+                self.fig.add_trace(
+                    go.Scatter(
+                        x=self.df.index,
+                        y=self.df[column],
+                        name=label,
+                        line=dict(color=color, width=2),
+                    ),
+                    row=row,
+                    col=col,
+                )
+        return self
+
+    def add_ema_trend_start_markers(self, result_row, row=1, col=1):
+        if result_row is None:
+            return self
+
+        for ema_col, duration_key, label, color in [
+            ("ema10", "duration_ema10", "EMA10 Trend Start", "#f59e0b"),
+            ("ema20", "duration_ema21", "EMA21 Trend Start", "#2563eb"),
+        ]:
+            duration = result_row.get(duration_key)
+            if pd.isna(duration) or duration <= 0:
+                continue
+
+            bars = int(duration)
+            if bars > len(self.df):
+                continue
+
+            start_idx = self.df.index[-bars]
+            start_close = self.df.iloc[-bars]["Close"]
+
+            self.fig.add_trace(
+                go.Scatter(
+                    x=[start_idx],
+                    y=[start_close],
+                    mode="markers+text",
+                    name=label,
+                    text=[label],
+                    textposition="bottom center",
+                    marker=dict(color=color, size=10, symbol="diamond"),
+                ),
+                row=row,
+                col=col,
+            )
+
+        return self
+
+    def add_volume_bars(self, row=2, col=1, color="lightgrey"):
+        if "Volume" not in self.df.columns:
+            return self
+
+        self.fig.add_trace(
+            go.Bar(
+                x=self.df.index,
+                y=self.df["Volume"],
+                name="Volume",
+                marker_color=color,
+            ),
+            row=row,
+            col=col,
+        )
+        return self
+
+    def add_volume_moving_averages(
+        self,
+        row=2,
+        col=1,
+        ma_columns=None,
+    ):
+        ma_columns = ma_columns or [
+            ("volume_ma_10", "10W Vol MA", "purple"),
+            ("volume_ma_20", "20W Vol MA", "green"),
+        ]
+
+        for column, label, color in ma_columns:
+            if column in self.df.columns:
+                self.fig.add_trace(
+                    go.Scatter(
+                        x=self.df.index,
+                        y=self.df[column],
+                        name=label,
+                        line=dict(color=color, width=1),
+                    ),
+                    row=row,
+                    col=col,
+                )
+        return self
+
+    def add_rsi(self, row=3, col=1):
+        if "rsi_14" not in self.df.columns:
+            return self
+
+        self.fig.add_trace(
+            go.Scatter(
+                x=self.df.index,
+                y=self.df["rsi_14"],
+                name="RSI (14)",
+            ),
+            row=row,
+            col=col,
+        )
+        self.fig.add_hline(y=70, line_dash="dash", line_color="red", row=row, col=col)
+        self.fig.add_hline(y=30, line_dash="dash", line_color="red", row=row, col=col)
+        return self
+
+    def update_layout(
+        self,
+        title=None,
+        height=800,
+        show_range_slider=False,
+    ):
+        self.fig.update_layout(
+            title=title or f"{self.symbol} - Price Analysis",
+            xaxis_rangeslider_visible=show_range_slider,
+            height=height,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+            ),
+        )
+        return self
+
+    def update_axis_titles(
+        self,
+        price_title="Price",
+        volume_title="Volume",
+        indicator_title="RSI",
+    ):
+        self.fig.update_yaxes(title_text=price_title, row=1, col=1)
+        if self.rows >= 2:
+            self.fig.update_yaxes(title_text=volume_title, row=2, col=1)
+        if self.rows >= 3:
+            self.fig.update_yaxes(title_text=indicator_title, row=3, col=1)
+        return self
+
+    def finalize(self):
+        return self.fig
+
+
+class LayeredCupChart(LayeredPriceChart):
+    """Cup-specific chart builder that keeps the cup annotation helpers together."""
+
+    def __init__(
+        self,
+        df_weekly,
+        symbol,
+        params=None,
+        row_heights=None,
+        vertical_spacing=0.05,
+    ):
+        self.params = params or default_params
+        df = prepare_weekly_chart_data(df_weekly, self.params, symbol)
+        super().__init__(df, symbol, rows=3, row_heights=row_heights, vertical_spacing=vertical_spacing)
+
+    def add_peak_low_markers(self, row=1, col=1):
         points = get_cup_reference_points(self.df, self.params)
         if not points:
             return self
@@ -209,12 +362,6 @@ class LayeredCupChart:
         fillcolor="rgba(34, 139, 34, 0.12)",
         line_color="darkgreen",
     ):
-        """
-        Highlight each tight-close group as one rectangular region.
-
-        The scanner treats contiguous overlapping 3-week tight windows as a
-        single group, so the chart should show one merged block per group too.
-        """
         points = get_cup_reference_points(self.df, self.params)
         if not points:
             return self
@@ -243,8 +390,6 @@ class LayeredCupChart:
                 col=col,
             )
 
-            # Add one legend-friendly trace for the first block so the layer name
-            # appears in the chart legend without repeating for every block.
             if first_block:
                 self.fig.add_trace(
                     go.Scatter(
@@ -264,120 +409,8 @@ class LayeredCupChart:
 
         return self
 
-    def add_volume_bars(self, row=2, col=1, color="lightgrey"):
-        """Add raw volume bars on the dedicated volume row."""
-        if "Volume" not in self.df.columns:
-            return self
-
-        self.fig.add_trace(
-            go.Bar(
-                x=self.df.index,
-                y=self.df["Volume"],
-                name="Volume",
-                marker_color=color,
-            ),
-            row=row,
-            col=col,
-        )
-        return self
-
-    def add_volume_moving_averages(
-        self,
-        row=2,
-        col=1,
-        ma_columns=None,
-    ):
-        """Add volume average overlays after the volume bars are in place."""
-        ma_columns = ma_columns or [
-            ("volume_ma_10", "10W Vol MA", "purple"),
-            ("volume_ma_20", "20W Vol MA", "green"),
-        ]
-
-        for column, label, color in ma_columns:
-            if column in self.df.columns:
-                self.fig.add_trace(
-                    go.Scatter(
-                        x=self.df.index,
-                        y=self.df[column],
-                        name=label,
-                        line=dict(color=color, width=1),
-                    ),
-                    row=row,
-                    col=col,
-                )
-        return self
-
-    def add_rsi(self, row=3, col=1):
-        """
-        Add RSI on its own row.
-
-        This stays modular so you can swap RSI for another momentum layer later.
-        """
-        if "rsi_14" not in self.df.columns:
-            return self
-
-        self.fig.add_trace(
-            go.Scatter(
-                x=self.df.index,
-                y=self.df["rsi_14"],
-                name="RSI (14)",
-            ),
-            row=row,
-            col=col,
-        )
-        self.fig.add_hline(y=70, line_dash="dash", line_color="red", row=row, col=col)
-        self.fig.add_hline(y=30, line_dash="dash", line_color="red", row=row, col=col)
-        return self
-
-    def update_layout(
-        self,
-        title=None,
-        height=800,
-        show_range_slider=False,
-    ):
-        """
-        Central place for layout defaults.
-
-        If you change chart styling later, do it here once instead of in each plot method.
-        """
-        self.fig.update_layout(
-            title=title or f"{self.symbol} - Cup Formation Analysis (Weekly)",
-            xaxis_rangeslider_visible=show_range_slider,
-            height=height,
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1,
-            ),
-        )
-        return self
-
-    def update_axis_titles(
-        self,
-        price_title="Price",
-        volume_title="Volume",
-        indicator_title="RSI",
-    ):
-        """Keep axis title updates in one small helper."""
-        self.fig.update_yaxes(title_text=price_title, row=1, col=1)
-        self.fig.update_yaxes(title_text=volume_title, row=2, col=1)
-        self.fig.update_yaxes(title_text=indicator_title, row=3, col=1)
-        return self
-
-    def finalize(self):
-        """Return the built figure once all desired layers are added."""
-        return self.fig
-
 
 def plot_cup_formation(df_weekly, symbol, params):
-    """
-    Backward-compatible wrapper for the existing Streamlit call site.
-
-    This uses the new modular builder internally, so home.py can keep a simple
-    one-line plot call while you gradually move to explicit layer-by-layer usage.
-    """
     chart = LayeredCupChart(df_weekly, symbol, params)
     return (
         chart
@@ -388,7 +421,43 @@ def plot_cup_formation(df_weekly, symbol, params):
         .add_volume_bars()
         .add_volume_moving_averages()
         .add_rsi()
-        .update_layout()
+        .update_layout(title=f"{symbol} - Cup Formation Analysis (Weekly)")
         .update_axis_titles()
+        .finalize()
+    )
+
+
+def _prepare_trend_follower_data(df_daily):
+    """Prepare daily data for the Trend Follower chart."""
+    df = df_daily.copy()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.set_index("Date")
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+
+    df = df.sort_index()
+    df["ema10"] = df["Close"].ewm(span=10, adjust=False).mean()
+    df["ema20"] = df["Close"].ewm(span=20, adjust=False).mean()
+    return df
+
+
+def plot_trend_follower_chart(df_daily, symbol, result_row=None, lookback=120):
+    df = _prepare_trend_follower_data(df_daily).tail(lookback)
+
+    chart = LayeredPriceChart(df, symbol, rows=2, row_heights=[0.75, 0.25])
+    return (
+        chart
+        .add_candles(name="Price")
+        .add_ema_lines()
+        .add_ema_trend_start_markers(result_row)
+        .add_volume_bars()
+        .update_layout(title=f"{symbol} - Trend Follower", height=780, show_range_slider=False)
+        .update_axis_titles(price_title="Price", volume_title="Volume")
         .finalize()
     )

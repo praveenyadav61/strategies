@@ -138,6 +138,76 @@ class EMAScanner:
         return False, z, touches, breaches
 
     # ---------------------------
+    # DURATION
+    # ---------------------------
+    def ema_follow_duration(self, df, ema_col, buffer=0.98):
+
+        count = 0
+
+        # iterate backwards (latest → past)
+        for i in range(len(df) - 1, -1, -1):
+
+            close = df.iloc[i]["Close"]
+            ema = df.iloc[i][ema_col]
+
+            if close >= ema * buffer:
+                count += 1
+            else:
+                break
+
+        return count
+
+    def bars_since_crossover(self, df, fast="ema10", slow="ema21", lookback_days=126):
+        df_recent = df.tail(lookback_days)
+        for i in range(len(df_recent) - 1, 0, -1):
+            prev_fast = df_recent.iloc[i - 1][fast]
+            prev_slow = df_recent.iloc[i - 1][slow]
+
+            curr_fast = df_recent.iloc[i][fast]
+            curr_slow = df_recent.iloc[i][slow]
+            # crossover detection
+            if prev_fast < prev_slow and curr_fast > curr_slow:
+                return len(df_recent) - i
+        return None
+
+    def ema_follow_duration_smart(
+        self,
+        df,
+        ema_col,
+        buffer=0.98,
+        max_violations=2,
+        lookback=30
+    ):
+        """
+        Counts EMA following duration allowing small violations
+        """
+
+        recent = df.tail(lookback)
+
+        duration = 0
+        violations = 0
+
+        # iterate backwards
+        for i in range(len(recent) - 1, -1, -1):
+
+            close = recent.iloc[i]["Close"]
+            ema = recent.iloc[i][ema_col]
+
+            # valid follow
+            if close >= ema * buffer:
+                duration += 1
+
+            else:
+                violations += 1
+
+                if violations > max_violations:
+                    break
+                else:
+                    duration += 1  # still count it
+
+        return duration, violations
+
+    # ---------------------------
     # MAIN SCAN
     # ---------------------------
     def scan(self):
@@ -158,7 +228,7 @@ class EMAScanner:
                 continue
 
             #custom dates
-            df = df.loc["2023-01-01":"2023-06-15"]
+            # df = df.loc["2023-01-01":"2023-06-15"]
             if df.empty:
                 continue
 
@@ -199,7 +269,10 @@ class EMAScanner:
             dist10 = (latest["Close"] - latest["ema10"]) / latest["ema10"]
             dist21 = (latest["Close"] - latest["ema21"]) / latest["ema21"]
 
-            alignment = latest["ema10"] > latest["ema21"]
+            dur10 = self.ema_follow_duration(df, "ema10")
+            dur21 = self.ema_follow_duration(df, "ema21")
+
+            crossover_10_20 = self.bars_since_crossover(df, "ema10", "ema21")
 
             # =========================
             # OUTPUT
@@ -211,33 +284,29 @@ class EMAScanner:
                 "followers": ",".join(followers),
 
                 # EMA
-                "ema10": latest["ema10"],
-                "ema21": latest["ema21"],
+                # "ema10": latest["ema10"],
+                # "ema21": latest["ema21"],
+                #crossovers
+                "crossover_10_20": crossover_10_20,
+
+                #duration
+                "duration_ema10": dur10,
+                "duration_ema21": dur21,
 
                 # slope
                 "slope_ema10": slope10,
                 "slope_ema21": slope21,
 
-                # efficiency
-                "efficiency": efficiency,
-
                 # zscore
                 "z_ema10": z10,
                 "z_ema21": z21,
 
+                # efficiency
+                "efficiency": efficiency,
+
                 # distance
                 "dist_ema10": dist10,
-                "dist_ema21": dist21,
-
-                # support
-                "touch_ema10": t10,
-                "touch_ema21": t21,
-
-                "breach_ema10": b10,
-                "breach_ema21": b21,
-
-                # alignment
-                "ema_alignment": alignment,
+                "dist_ema21": dist21
             })
 
         # =========================
@@ -265,5 +334,5 @@ if __name__ == "__main__":
         print("\nTop Results:")
         print(df.head(15))
 
-        df.to_csv("ema_trend_follower_olddata.csv", index=False)
+        df.to_csv("ema_trend_follower.csv", index=False)
         print("\nSaved to ema_momentum_results.csv")
