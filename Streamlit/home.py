@@ -7,14 +7,13 @@ from pathlib import Path
 # from VCP_Scanner import run_vcp_scanner
 # from sm_bg import run_full_scan, plot_cup_formation_smbg
 # from base_formation import run_full_scan_base
-from modular_base_scanner import CupScanner
-from chart_plot import plot_cup_formation, plot_trend_follower_chart
-
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
+from modular_base_scanner import CupScanner
+from chart_plot import plot_cup_formation, plot_trend_follower_chart
 from trend_follower.final_trend_follower import EMAScanner
 
 
