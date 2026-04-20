@@ -38,20 +38,27 @@ def get_nse_symbols():
 def fetch_eps(symbol):
     try:
         ticker = yf.Ticker(symbol)
-        df = ticker.quarterly_earnings
+
+        df = ticker.get_earnings_dates(limit=12)
 
         if df is None or df.empty:
             return None
 
         df = df.reset_index()
-        df.columns = ["date", "eps"]
+
+        # Yahoo returns:
+        # 'Earnings Date', 'EPS Estimate', 'Reported EPS', 'Surprise(%)'
+        df = df.rename(columns={
+            "Earnings Date": "date",
+            "Reported EPS": "eps"
+        })
+
+        df = df[["date", "eps"]]
         df["symbol"] = symbol
 
-        df = df[["symbol", "date", "eps"]]
+        # clean
+        df = df.dropna(subset=["eps"])
         df = df.sort_values("date")
-
-        # keep last 12 quarters
-        df = df.tail(12)
 
         return df
 
@@ -67,6 +74,7 @@ def load_existing():
 
 
 def update_eps():
+    print("yess")
     symbols = get_nse_symbols()
     existing_df = load_existing()
 
@@ -103,6 +111,7 @@ def update_eps():
     )
 
     # Save
+    print("saving......")
     os.makedirs("data", exist_ok=True)
     final_df.to_csv(CSV_PATH, index=False)
 
