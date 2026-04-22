@@ -11,10 +11,8 @@ HEADERS = {
 }
 
 BASE_URL = "https://www.nseindia.com"
-
-# NSE CSV endpoints
-BULK_CSV_URL = "https://archives.nseindia.com/content/equities/bulk.csv"
-BLOCK_CSV_URL = "https://archives.nseindia.com/content/equities/block.csv"
+HISTORICAL_DEALS_API = f"{BASE_URL}/api/historicalOR/bulk-block-short-deals"
+LOOKBACK_MONTHS = 6
 
 # The relative path "../data/deals_data/" can be confusing because it depends on
 # where you run the script from. A more robust approach is to build an absolute
@@ -58,17 +56,41 @@ def normalize_deals(df, fetch_date=None):
         return df
 
     df = df.copy()
-    df.columns = [str(col).strip() for col in df.columns]
+    df.columns = [
+        str(col)
+        .replace("\ufeff", "")
+        .replace('ï»¿', "")
+        .replace('"', "")
+        .strip()
+        for col in df.columns
+    ]
+    df = df.loc[:, ~df.columns.duplicated()].copy()
 
     if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], format="%d-%b-%Y", errors="coerce").dt.date
+        date_series = (
+            df["Date"]
+            .astype(str)
+            .str.replace('"', "", regex=False)
+            .str.strip()
+            .str.upper()
+        )
+        parsed_dates = pd.to_datetime(date_series, format="%d-%b-%Y", errors="coerce")
+
+        # When data is loaded back from parquet, Date may already look like
+        # `YYYY-MM-DD`. Parse that fallback format too so repeated runs stay stable.
+        missing_mask = parsed_dates.isna()
+        if missing_mask.any():
+            parsed_dates.loc[missing_mask] = pd.to_datetime(
+                date_series.loc[missing_mask],
+                format="%Y-%m-%d",
+                errors="coerce",
+            )
+
+        df["Date"] = parsed_dates.dt.date
 
     for col in ["Quantity Traded", "Trade Price / Wght. Avg. Price"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", "", regex=False), errors="coerce")
-            df.columns = [str(col).strip() for col in df.columns]
-            df = df.loc[:, ~df.columns.duplicated()].copy()
-
 
     if fetch_date is not None:
         df["fetch_date"] = pd.to_datetime(fetch_date).date()
@@ -79,11 +101,41 @@ def normalize_deals(df, fetch_date=None):
     return df
 
 
-def deduplicate_deals(df):
+def remove_bulk_round_trip_trades(df):
+    """
+    For bulk deals only, remove Date + Symbol + Client Name groups where the
+    same client appears on both BUY and SELL for the same day.
+    """
+    if df.empty:
+        return df
+
+    side_col = None
+    for candidate in ["Buy / Sell", "Buy/Sell"]:
+        if candidate in df.columns:
+            side_col = candidate
+            break
+
+    required_cols = ["Date", "Symbol", "Client Name", side_col]
+    if side_col is None or any(col not in df.columns for col in required_cols):
+        return df
+
+    df = df.copy()
+    df[side_col] = df[side_col].astype(str).str.strip().str.upper()
+
+    return (
+        df.groupby(["Date", "Symbol", "Client Name"], group_keys=False)
+        .filter(lambda x: x[side_col].nunique() == 1)
+        .reset_index(drop=True)
+    )
+
+
+def deduplicate_deals(df, apply_bulk_trade_filter=False):
     if df.empty:
         return df
 
     df = normalize_deals(df)
+    if apply_bulk_trade_filter:
+        df = remove_bulk_round_trip_trades(df)
 
     subset_cols = [col for col in df.columns if col != "fetch_date"]
     if not subset_cols:
@@ -93,18 +145,46 @@ def deduplicate_deals(df):
 
 
 # -----------------------------
-# FETCH LATEST SNAPSHOT
+# FETCH HISTORICAL DATA
 # -----------------------------
-def fetch_latest_snapshot(as_of_date=None):
+def format_api_date(value):
+    return pd.to_datetime(value).strftime("%d-%m-%Y")
+
+
+def fetch_historical_deals(session, option_type, from_date, to_date):
+    params = {
+        "optionType": option_type,
+        "from": format_api_date(from_date),
+        "to": format_api_date(to_date),
+        "csv": "true",
+    }
+
+    try:
+        response = session.get(HISTORICAL_DEALS_API, params=params, headers=HEADERS, timeout=30)
+        response.raise_for_status()
+        df = pd.read_csv(pd.io.common.StringIO(response.text))
+        return df
+    except Exception as e:
+        print(f"Error fetching {option_type} from {params['from']} to {params['to']}: {e}")
+        return pd.DataFrame()
+
+
+def fetch_last_six_months(as_of_date=None):
     session = create_session()
     as_of_date = pd.to_datetime(as_of_date or datetime.now().date()).date()
+    from_date = (pd.Timestamp(as_of_date) - pd.DateOffset(months=LOOKBACK_MONTHS)).date()
 
-    bulk_df = fetch_csv(session, BULK_CSV_URL)
-    block_df = fetch_csv(session, BLOCK_CSV_URL)
+    print(
+        "Fetching historical bulk/block deals "
+        f"from {from_date} to {as_of_date}"
+    )
+
+    bulk_df = fetch_historical_deals(session, "bulk_deals", from_date, as_of_date)
+    block_df = fetch_historical_deals(session, "block_deals", from_date, as_of_date)
 
     if not bulk_df.empty:
         bulk_df = normalize_deals(bulk_df, fetch_date=as_of_date)
-        bulk_df = deduplicate_deals(bulk_df)
+        bulk_df = deduplicate_deals(bulk_df, apply_bulk_trade_filter=True)
     else:
         print(f"No bulk data available for snapshot dated {as_of_date}")
 
@@ -131,8 +211,8 @@ def append_to_parquet(df, name):
         existing_df = pd.read_parquet(file_path)
         df = pd.concat([existing_df, df], ignore_index=True)
 
-    df = deduplicate_deals(df)
-    sort_cols = [col for col in ["fetch_date", "Date", "Symbol"] if col in df.columns]
+    df = deduplicate_deals(df, apply_bulk_trade_filter=(name == "bulk_deals"))
+    sort_cols = [col for col in ["Date", "Symbol", "fetch_date"] if col in df.columns]
     if sort_cols:
         df = df.sort_values(sort_cols).reset_index(drop=True)
 
@@ -147,8 +227,8 @@ def append_to_parquet(df, name):
 def run_daily_pipeline(fetch_date_str=None):
     fetch_date = pd.to_datetime(fetch_date_str or datetime.now().date()).date()
 
-    print(f"Fetching latest NSE bulk/block snapshot for local date tag: {fetch_date}")
-    bulk_df, block_df = fetch_latest_snapshot(fetch_date)
+    print(f"Fetching latest 6 months of NSE bulk/block deals as of {fetch_date}")
+    bulk_df, block_df = fetch_last_six_months(fetch_date)
 
     bulk_df = append_to_parquet(bulk_df, "bulk_deals")
 

@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
 from modular_base_scanner import CupScanner
 from chart_plot import plot_cup_formation, plot_trend_follower_chart
 from trend_follower.final_trend_follower import EMAScanner
+from audio import load_saved_records, process_audio_request
 
 
 def normalize_symbol_for_deals(symbol):
@@ -54,7 +55,10 @@ static_data_path = 'data/static/static_data.parquet'
 static_df = pd.read_parquet(static_data_path)
 # Sidebar for navigation
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Choose a page", ["Home", "Base Formation","Bulk_Block_Deal","Trend_Follower"])
+page = st.sidebar.radio(
+    "Choose a page",
+    ["Home", "Base Formation", "Bulk_Block_Deal", "Trend_Follower", "Audio Transcript"],
+)
 m_cap =st.sidebar.number_input("Market Cap Filter (in Crores)", min_value=10, value=1000, step=1000000000)
 if page == "Home":
     st.header("Stock Analysis")
@@ -200,6 +204,68 @@ elif page == "Base Formation":
                     st.error(f"Could not find data file for {selected_symbol}.")
                 except Exception as e:
                     st.error(f"An error occurred while plotting {selected_symbol}: {e}")
+
+elif page == "Audio Transcript":
+    st.title("Audio Transcript")
+    st.info("Use Gemini to generate a cleaned transcript and structured summary from an NSE audio link.")
+
+    with st.form("audio_transcript_form"):
+        gemini_api_key = st.text_input("Gemini API Key", type="password")
+        symbol = st.text_input("Symbol", placeholder="For example, HAL.NS")
+        company_name = st.text_input("Company Name", placeholder="For example, Hindustan Aeronautics")
+        audio_url = st.text_input("NSE Audio URL", placeholder="Paste mp3, wav, or m4a audio link")
+        submitted = st.form_submit_button("Generate Transcript and Summary")
+
+    log_placeholder = st.empty()
+    logs_key = "audio_transcript_logs"
+
+    def ui_progress(message: str) -> None:
+        logs = st.session_state.setdefault(logs_key, [])
+        logs.append(message)
+        st.session_state[logs_key] = logs[-80:]
+        log_placeholder.code("\n".join(st.session_state[logs_key]), language="text")
+
+    if submitted:
+        st.session_state[logs_key] = []
+        try:
+            with st.spinner("Processing audio with Gemini..."):
+                result = process_audio_request(
+                    gemini_api_key=gemini_api_key,
+                    symbol=symbol,
+                    company_name=company_name,
+                    audio_url=audio_url,
+                    progress_callback=ui_progress,
+                )
+
+            record = result["record"]
+            if result["was_cached"]:
+                st.success("Loaded saved transcript and summary for this audio URL.")
+            else:
+                st.success("Transcript and summary generated successfully.")
+
+            st.caption(f"Saved to {result['save_path']}")
+
+            with st.expander("Transcript", expanded=True):
+                st.code(record["transcript"], language="markdown")
+
+            with st.expander("Summary", expanded=True):
+                st.code(record["summary"], language="markdown")
+        except Exception as e:
+            st.error(f"Audio processing failed: {e}")
+
+    if symbol.strip():
+        try:
+            saved_payload = load_saved_records(symbol)
+            saved_records = saved_payload.get("records", [])
+            if saved_records:
+                st.subheader(f"Saved records for {saved_payload['symbol']}")
+                records_df = pd.DataFrame(saved_records)
+                display_cols = [
+                    col for col in ["company_name", "audio_url", "created_at", "model"] if col in records_df.columns
+                ]
+                st.dataframe(records_df[display_cols], use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.warning(f"Could not load saved records: {e}")
 
 elif page == "Bulk_Block_Deal":
     st.title("Bulk Block Deal Scanner")

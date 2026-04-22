@@ -14,13 +14,13 @@ if PROJECT_ROOT not in sys.path:
 from data_layer.data_engine import DataEngine
 
 # ---------------- CONFIG ----------------
-data_path = '../data/daily/'
+data_path = '../data/test_data/'
 if not os.path.exists(data_path):
-    data_path = 'data/daily/'
+    data_path = 'data/test_data/'
 
 DEFAULT_PARAMS = {
-    'MIN_WEEKS': 8,
-    'MAX_WEEKS': 52,
+    'MIN_WEEKS': 6,
+    'MAX_WEEKS': 92,
     'MIN_DEPTH': 0.15,
     'MAX_DEPTH': 0.40,
     'RECOVERY_MIN': 0.40,
