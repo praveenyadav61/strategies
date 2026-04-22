@@ -11,12 +11,12 @@ jobs:
 
     steps:
       - name: Checkout dev branch
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: dev   # ✅ always use dev branch
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
