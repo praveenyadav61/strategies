@@ -19,8 +19,8 @@ if not os.path.exists(data_path):
     data_path = 'data/test_data/'
 
 DEFAULT_PARAMS = {
-    'MIN_WEEKS': 6,
-    'MAX_WEEKS': 92,
+    'MIN_WEEKS': 8,
+    'MAX_WEEKS': 104,
     'MIN_DEPTH': 0.15,
     'MAX_DEPTH': 0.40,
     'RECOVERY_MIN': 0.40,
@@ -52,8 +52,11 @@ class ScanStats:
 def calculate_cup_metrics(df, params):
     df = df.copy()
 
-    df['ma_10'] = df['Close'].rolling(10).mean()
-    df['ma_40'] = df['Close'].rolling(40).mean()
+    df['ma_10'] = df['Close'].ewm(span=10).mean()
+    df['ma_40'] = df['Close'].ewm(span=40).mean()
+
+    # df["ema10"] = df["Close"].ewm(span=10).mean()
+    # df["ema21"] = df["Close"].ewm(span=21).mean()
 
     df['volume_ma_10'] = df['Volume'].rolling(10).mean()
     df['volume_ma_20'] = df['Volume'].rolling(20).mean()
@@ -110,7 +113,6 @@ def find_pivot(df, left_high, bottom_idx, bottom_price, logger=None):
 
 # ---------------- CORE LOGIC ----------------
 def check_cup_conditions(df, params, symbol, stats, logger):
-
     try:
         window = df[-params['MAX_WEEKS']:]
 
@@ -129,8 +131,8 @@ def check_cup_conditions(df, params, symbol, stats, logger):
 
         # Duration
         duration = (bottom_idx - peak_idx).days / 7
-        if duration < params['MIN_WEEKS']:
-            return None
+        # if duration < params['MIN_WEEKS']:
+        #     return None
         stats.duration.append(symbol)
 
         # Recovery
@@ -188,8 +190,7 @@ class CupScanner:
 
     def scan_symbol(self, symbol):
         try:
-            df = self.data_engine.get_symbol(symbol).tail(250)
-
+            df = self.data_engine.get_symbol(symbol).tail(600)
             df.index = pd.to_datetime(df.index)
             df = df.sort_index()
 
@@ -215,12 +216,10 @@ class CupScanner:
                 'Close': 'last',
                 'Volume': 'sum'
             }).dropna()
-
             if len(weekly) < self.params['MAX_WEEKS']:
                 return None
 
             weekly = calculate_cup_metrics(weekly, self.params)
-
             return check_cup_conditions(
                 weekly, self.params, symbol, self.stats, self.logger
             )
@@ -269,3 +268,9 @@ if __name__ == "__main__":
     print("Near high:", len(scanner.stats.near_high))
     print("Prior uptrend:", len(scanner.stats.prior_uptrend))
     print("Pivot:", len(scanner.stats.pivot))
+
+    # print("\all level stocks : ")
+    # print("DMA Filtered:", scanner.stats.dma_filtered)
+    # print("Min Depth:", scanner.stats.min_depth)
+    # print("Duration:", scanner.stats.duration)
+    # print("Near High:", scanner.stats.near_high)

@@ -98,6 +98,8 @@ class LayeredPriceChart:
                 row_heights = [0.75, 0.25]
             elif rows == 3:
                 row_heights = [0.6, 0.2, 0.2]
+            elif rows == 4:
+                row_heights = [0.5, 0.2, 0.15, 0.15]
             else:
                 row_heights = [1.0 / rows] * rows
 
@@ -292,12 +294,15 @@ class LayeredPriceChart:
         price_title="Price",
         volume_title="Volume",
         indicator_title="RSI",
+        eps_title="log EPS",
     ):
         self.fig.update_yaxes(title_text=price_title, row=1, col=1)
         if self.rows >= 2:
             self.fig.update_yaxes(title_text=volume_title, row=2, col=1)
         if self.rows >= 3:
             self.fig.update_yaxes(title_text=indicator_title, row=3, col=1)
+        if self.rows >= 4:
+            self.fig.update_yaxes(title_text=eps_title, row=4, col=1)
         return self
 
     def finalize(self):
@@ -317,7 +322,7 @@ class LayeredCupChart(LayeredPriceChart):
     ):
         self.params = params or default_params
         df = prepare_weekly_chart_data(df_weekly, self.params, symbol)
-        super().__init__(df, symbol, rows=3, row_heights=row_heights, vertical_spacing=vertical_spacing)
+        super().__init__(df, symbol, rows=4, row_heights=row_heights, vertical_spacing=vertical_spacing)
 
     def add_peak_low_markers(self, row=1, col=1):
         points = get_cup_reference_points(self.df, self.params)
@@ -409,6 +414,26 @@ class LayeredCupChart(LayeredPriceChart):
 
         return self
 
+    def add_eps(self, row=4, col=1):
+        eps_df = pd.read_csv('data/quarterly/eps_processed.csv')
+        eps_df = eps_df[eps_df['symbol']+".NS" == self.symbol]
+        if eps_df.empty:
+            return self
+        eps_df['date'] = pd.to_datetime(eps_df['date'])
+        eps_df = eps_df.sort_values('date')
+        self.fig.add_trace(
+            go.Scatter(
+                x=eps_df['date'],
+                y=eps_df['log_eps'],
+                mode='lines+markers',
+                name='Log EPS',
+                line=dict(color='purple'),
+            ),
+            row=row,
+            col=col,
+        )
+        return self
+
 
 def plot_cup_formation(df_weekly, symbol, params):
     chart = LayeredCupChart(df_weekly, symbol, params)
@@ -421,6 +446,7 @@ def plot_cup_formation(df_weekly, symbol, params):
         .add_volume_bars()
         .add_volume_moving_averages()
         .add_rsi()
+        .add_eps()
         .update_layout(title=f"{symbol} - Cup Formation Analysis (Weekly)")
         .update_axis_titles()
         .finalize()
