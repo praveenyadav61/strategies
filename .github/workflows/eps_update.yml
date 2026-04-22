@@ -26,7 +26,7 @@ jobs:
 
       - name: Run EPS script
         run: |
-          python eps.py
+          python fundamental_data/eps.py
 
       - name: Commit & Push changes to dev
         run: |
