@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import sys
 from pathlib import Path
+from datetime import date
 # from Data_transformation import read_data
 # from VCP_Scanner import run_vcp_scanner
 # from sm_bg import run_full_scan, plot_cup_formation_smbg
@@ -24,6 +25,170 @@ def normalize_symbol_for_deals(symbol):
     usually store them as `ABC`. Normalize once so both sources can be matched.
     """
     return str(symbol).replace(".NS", "").strip().upper()
+
+
+def first_existing_path(*candidates):
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.exists():
+            return path
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def load_static_data():
+    static_path = first_existing_path(
+        ROOT_DIR / "data" / "static" / "static_data.parquet",
+        "data/static/static_data.parquet",
+        "../data/static/static_data.parquet",
+    )
+    if static_path is None:
+        return pd.DataFrame()
+
+    static_df = pd.read_parquet(static_path)
+    if "symbol" in static_df.columns:
+        static_df["symbol"] = static_df["symbol"].astype(str).str.strip()
+    return static_df
+
+
+@st.cache_data(show_spinner=False)
+def load_deals_data():
+    bulk_path = first_existing_path(
+        ROOT_DIR / "data" / "deals_data" / "bulk_deals.parquet",
+        "data/deals_data/bulk_deals.parquet",
+        "../data/deals_data/bulk_deals.parquet",
+    )
+    block_path = first_existing_path(
+        ROOT_DIR / "data" / "deals_data" / "block_deals.parquet",
+        "data/deals_data/block_deals.parquet",
+        "../data/deals_data/block_deals.parquet",
+    )
+
+    bulk_df = pd.DataFrame()
+    block_df = pd.DataFrame()
+
+    if bulk_path is not None:
+        bulk_df = pd.read_parquet(bulk_path)
+        bulk_df.columns = bulk_df.columns.str.strip()
+        if "Symbol" in bulk_df.columns:
+            bulk_df["Symbol"] = bulk_df["Symbol"].astype(str).str.strip().str.upper()
+        if "Date" in bulk_df.columns:
+            bulk_df["Date"] = pd.to_datetime(bulk_df["Date"], errors="coerce")
+
+    if block_path is not None:
+        block_df = pd.read_parquet(block_path)
+        block_df.columns = block_df.columns.str.strip()
+        if "Symbol" in block_df.columns:
+            block_df["Symbol"] = block_df["Symbol"].astype(str).str.strip().str.upper()
+        if "Date" in block_df.columns:
+            block_df["Date"] = pd.to_datetime(block_df["Date"], errors="coerce")
+
+    return bulk_df, block_df
+
+
+@st.cache_data(show_spinner=False)
+def load_announcements_data():
+    announcement_path = first_existing_path(
+        ROOT_DIR / "data" / "Announcements" / "announcements.parquet",
+        "data/Announcements/announcements.parquet",
+        "../data/Announcements/announcements.parquet",
+    )
+    if announcement_path is None:
+        return pd.DataFrame()
+
+    announcement_df = pd.read_parquet(announcement_path)
+    announcement_df.columns = announcement_df.columns.str.strip()
+
+    if "symbol" in announcement_df.columns:
+        announcement_df["symbol"] = (
+            announcement_df["symbol"].astype(str).str.strip().str.upper()
+        )
+
+    if "date" in announcement_df.columns:
+        announcement_df["date"] = pd.to_datetime(announcement_df["date"], errors="coerce")
+
+    return announcement_df
+
+
+def format_announcements_table(announcement_df):
+    if announcement_df.empty:
+        return announcement_df
+
+    announcement_info = announcement_df.sort_values(
+        by="date", ascending=False, na_position="last"
+    ).copy()
+    preferred_cols = [
+        "date",
+        "symbol",
+        "company_name",
+        "attachment_text",
+        "attachment_url",
+    ]
+    available_cols = [col for col in preferred_cols if col in announcement_info.columns]
+    return announcement_info[available_cols] if available_cols else announcement_info
+
+
+def get_audio_recording_announcements(announcement_df, limit=200):
+    if announcement_df.empty:
+        return announcement_df
+
+    filtered_df = announcement_df.copy()
+
+    if "subject" not in filtered_df.columns or "attachment_text" not in filtered_df.columns:
+        return pd.DataFrame()
+
+    subject_series = filtered_df["subject"].astype(str).str.strip().str.lower()
+    attachment_series = filtered_df["attachment_text"]
+
+    mask = (
+        subject_series.eq("analysts/institutional investor meet/con. call updates")
+        & (
+            attachment_series.astype(str).str.lower().str.contains("link", na=False)
+            | attachment_series.isna()
+        )
+    )
+
+    filtered_df = filtered_df[mask].sort_values(by="date", ascending=False)
+    preferred_cols = [
+        "date",
+        "symbol",
+        "company_name",
+        "attachment_text",
+        "attachment_url",
+    ]
+    available_cols = [col for col in preferred_cols if col in filtered_df.columns]
+    if available_cols:
+        filtered_df = filtered_df[available_cols]
+
+    return filtered_df.head(limit)
+
+
+def filter_by_date_and_symbol(df, date_col, symbol_col, start_date, end_date, selected_symbol):
+    if df.empty:
+        return df
+
+    filtered_df = df.copy()
+
+    if date_col in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df[date_col].notna()]
+        filtered_df = filtered_df[
+            filtered_df[date_col].dt.date.between(start_date, end_date)
+        ]
+
+    if selected_symbol != "All" and symbol_col in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df[symbol_col] == selected_symbol]
+
+    return filtered_df
+
+
+def get_symbol_options(*frames, symbol_col):
+    symbols = set()
+    for df in frames:
+        if not df.empty and symbol_col in df.columns:
+            symbols.update(
+                df[symbol_col].dropna().astype(str).str.strip().tolist()
+            )
+    return ["All"] + sorted(symbol for symbol in symbols if symbol)
 
 
 def load_daily_price_data(symbol):
@@ -50,14 +215,16 @@ def load_daily_price_data(symbol):
 
 # st.set_page_config(layout="wide")
 ## data read
-# Load static data and merge it with scan results BEFORE displaying
-static_data_path = 'data/static/static_data.parquet'
-static_df = pd.read_parquet(static_data_path)
+# Load shared data once through cached helpers so all tabs reuse it.
+static_df = load_static_data()
+bulk_deals_df, block_deals_df = load_deals_data()
+announcements_df = load_announcements_data()
+
 # Sidebar for navigation
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Choose a page",
-    ["Home", "Base Formation", "Bulk_Block_Deal", "Trend_Follower", "Audio Transcript"],
+    ["Home", "Base Formation", "Announcements", "Bulk_Block_Deal", "Trend_Follower", "Audio Transcript"],
 )
 m_cap =st.sidebar.number_input("Market Cap Filter (in Crores)", min_value=10, value=1000, step=1000000000)
 if page == "Home":
@@ -105,7 +272,7 @@ elif page == "Base Formation":
             st.subheader("Stocks with Potential Cup Formations")
             
             display_df = bulk_df
-            if os.path.exists(static_data_path):
+            if not static_df.empty:
                 display_df = bulk_df.merge(static_df, left_on='Symbol', right_on='symbol', how='left')
 
                 # Convert Market Cap to Crores for better readability and sorting
@@ -166,23 +333,11 @@ elif page == "Base Formation":
                     st.dataframe(static_info, use_container_width=True)
                     # Show bulk / block deals for the selected symbol after
                     # normalizing `.NS` style chart symbols to deal symbols.
-                    bulk_path = 'data/deals_data/bulk_deals.parquet' 
-                    block_path = 'data/deals_data/block_deals.parquet'
                     selected_deal_symbol = normalize_symbol_for_deals(selected_symbol)
 
-                    if os.path.exists(bulk_path) and os.path.exists(block_path):
-                        bulk_df = pd.read_parquet(bulk_path)
-                        block_df = pd.read_parquet(block_path)
-                        bulk_df.columns = bulk_df.columns.str.strip()
-                        block_df.columns = block_df.columns.str.strip()
-
-                        if 'Symbol' in bulk_df.columns:
-                            bulk_df['Symbol'] = bulk_df['Symbol'].astype(str).str.strip().str.upper()
-                        if 'Symbol' in block_df.columns:
-                            block_df['Symbol'] = block_df['Symbol'].astype(str).str.strip().str.upper()
-
-                        bulk_info = bulk_df[bulk_df['Symbol'] == selected_deal_symbol]
-                        block_info = block_df[block_df['Symbol'] == selected_deal_symbol]
+                    if not bulk_deals_df.empty or not block_deals_df.empty:
+                        bulk_info = bulk_deals_df[bulk_deals_df['Symbol'] == selected_deal_symbol]
+                        block_info = block_deals_df[block_deals_df['Symbol'] == selected_deal_symbol]
 
                         st.write(f"Bulk/Block Deals for {selected_deal_symbol}")
                         if not bulk_info.empty:
@@ -193,6 +348,29 @@ elif page == "Base Formation":
                             st.dataframe(block_info, use_container_width=True, hide_index=True)
                         if bulk_info.empty and block_info.empty:
                             st.info(f"No bulk/block deals found for {selected_deal_symbol}.")
+
+                    if not announcements_df.empty:
+                        st.write(f"Announcements for {selected_deal_symbol}")
+                        announcement_info = announcements_df[
+                            announcements_df['symbol'] == selected_deal_symbol
+                        ].copy()
+                        if announcement_info.empty:
+                            st.info(f"No announcements found for {selected_deal_symbol}.")
+                        else:
+                            announcement_info = format_announcements_table(announcement_info)
+                            st.dataframe(
+                                announcement_info,
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    'attachment_url': st.column_config.LinkColumn(
+                                        'Attachment URL',
+                                        display_text='Open attachment',
+                                    )
+                                },
+                            )
+                    else:
+                        st.info("Announcement data file was not found.")
 
 
 
@@ -205,9 +383,76 @@ elif page == "Base Formation":
                 except Exception as e:
                     st.error(f"An error occurred while plotting {selected_symbol}: {e}")
 
+elif page == "Announcements":
+    st.title("Announcements")
+    st.info("This page shows all available corporate announcements sorted by latest date first.")
+    default_start_date = date(2026, 1, 1)
+    default_end_date = date.today()
+
+    if announcements_df.empty:
+        st.warning("Announcement data file was not found or contains no rows.")
+    else:
+        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        with filter_col1:
+            start_date = st.date_input("Start Date", value=default_start_date, key="announcements_start_date")
+        with filter_col2:
+            end_date = st.date_input("End Date", value=default_end_date, key="announcements_end_date")
+        with filter_col3:
+            selected_symbol = st.selectbox(
+                "Select Symbol",
+                options=get_symbol_options(announcements_df, symbol_col="symbol"),
+                key="announcements_symbol",
+            )
+
+        display_announcements_df = filter_by_date_and_symbol(
+            announcements_df,
+            date_col="date",
+            symbol_col="symbol",
+            start_date=start_date,
+            end_date=end_date,
+            selected_symbol=selected_symbol,
+        )
+        display_announcements_df = format_announcements_table(display_announcements_df)
+        st.caption(f"Showing {len(display_announcements_df)} announcements.")
+        if display_announcements_df.empty:
+            st.info("No announcements found for the selected filters.")
+        else:
+            st.dataframe(
+                display_announcements_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "attachment_url": st.column_config.LinkColumn(
+                        "Attachment URL",
+                        display_text="Open attachment",
+                    )
+                },
+            )
+
 elif page == "Audio Transcript":
     st.title("Audio Transcript")
     st.info("Use Gemini to generate a cleaned transcript and structured summary from an NSE audio link.")
+
+    st.subheader("Recent Audio Recording Announcements")
+    if announcements_df.empty:
+        st.info("Announcement data file was not found.")
+    else:
+        audio_announcements_df = get_audio_recording_announcements(announcements_df, limit=200)
+        st.caption(f"Showing {len(audio_announcements_df)} recent audio-related announcements.")
+        if audio_announcements_df.empty:
+            st.info("No audio recording announcements matched the configured filter.")
+        else:
+            st.dataframe(
+                audio_announcements_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "attachment_url": st.column_config.LinkColumn(
+                        "Attachment URL",
+                        display_text="Open attachment",
+                    )
+                },
+            )
 
     with st.form("audio_transcript_form"):
         gemini_api_key = st.text_input("Gemini API Key", type="password")
@@ -270,32 +515,52 @@ elif page == "Audio Transcript":
 elif page == "Bulk_Block_Deal":
     st.title("Bulk Block Deal Scanner")
     st.info("This scanner identifies stocks with significant bulk block deals.")
-    bulk_df= pd.read_parquet('data/deals_data/bulk_deals.parquet')
-    block_df= pd.read_parquet('data/deals_data/block_deals.parquet')
-    # bulk_df['Symbol']= bulk_df['Symbol'].apply(normalize_symbol_for_deals())
-    # block_df['Symbol']= block_df['Symbol'].apply(normalize_symbol_for_deals())
-    display_df = bulk_df.merge(static_df, left_on='Symbol', right_on='symbol', how='left')
+    default_start_date = date(2026, 1, 1)
+    default_end_date = date.today()
+    bulk_df = bulk_deals_df.copy()
+    block_df = block_deals_df.copy()
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+    with filter_col1:
+        start_date = st.date_input("Start Date", value=default_start_date, key="bulk_block_start_date")
+    with filter_col2:
+        end_date = st.date_input("End Date", value=default_end_date, key="bulk_block_end_date")
+    with filter_col3:
+        selected_symbol = st.selectbox(
+            "Select Symbol",
+            options=get_symbol_options(bulk_df, block_df, symbol_col="Symbol"),
+            key="bulk_block_symbol",
+        )
 
-    # Convert Market Cap to Crores for better readability and sorting
-    if 'marketCap' in display_df.columns:
-        display_df['Market Cap (Cr)'] = (display_df['marketCap'] / 1_00_00_000).round(0)
+    bulk_df = filter_by_date_and_symbol(
+        bulk_df,
+        date_col="Date",
+        symbol_col="Symbol",
+        start_date=start_date,
+        end_date=end_date,
+        selected_symbol=selected_symbol,
+    )
+    block_df = filter_by_date_and_symbol(
+        block_df,
+        date_col="Date",
+        symbol_col="Symbol",
+        start_date=start_date,
+        end_date=end_date,
+        selected_symbol=selected_symbol,
+    )
 
-    # Define the desired column order as requested
-    metrics_to_front = ['Tight Groups', 'Depth', 'Recovery']
-    bulk_df_cols = [col for col in bulk_df.columns if col not in ['Symbol'] + metrics_to_front]
-    static_cols_to_show = ['longName', 'industry', 'sector', 'Market Cap (Cr)']
+    st.caption(f"Bulk deals: {len(bulk_df)} | Block deals: {len(block_df)}")
 
-    # Combine columns in the specified order
-    # The original 'marketCap' will be excluded unless explicitly added back.
-    ordered_cols = ['Symbol'] + static_cols_to_show + metrics_to_front + bulk_df_cols
-    # Filter list to ensure all columns exist in the merged DataFrame
-    final_cols = [col for col in ordered_cols if col in display_df.columns]
-    display_df = display_df[final_cols]
-    display_df = display_df[display_df['Market Cap (Cr)'] >= m_cap]  # Apply market cap filter
     st.subheader("Bulk Deals")
-    st.dataframe(bulk_df, use_container_width=True)
+    if bulk_df.empty:
+        st.info("No bulk deals found for the selected filters.")
+    else:
+        st.dataframe(bulk_df.sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
+
     st.subheader("Block Deals")
-    st.dataframe(block_df, use_container_width=True)
+    if block_df.empty:
+        st.info("No block deals found for the selected filters.")
+    else:
+        st.dataframe(block_df.sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
 
 elif page == "Trend_Follower":
     st.title("Trend Follower Scanner")

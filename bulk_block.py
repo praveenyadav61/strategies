@@ -64,6 +64,18 @@ def normalize_deals(df, fetch_date=None):
         .strip()
         for col in df.columns
     ]
+
+    if "Buy/Sell" in df.columns:
+        if "Buy / Sell" in df.columns:
+            canonical_side = df["Buy / Sell"].where(
+                df["Buy / Sell"].notna() & (df["Buy / Sell"].astype(str).str.strip() != ""),
+                df["Buy/Sell"],
+            )
+            df = df.drop(columns=["Buy/Sell"])
+            df["Buy / Sell"] = canonical_side
+        else:
+            df = df.rename(columns={"Buy/Sell": "Buy / Sell"})
+
     df = df.loc[:, ~df.columns.duplicated()].copy()
 
     if "Date" in df.columns:
