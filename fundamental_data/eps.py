@@ -8,23 +8,17 @@ from io import StringIO
 # -------------------------
 # CONFIG
 # -------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PARENT_DIR = os.path.dirname(BASE_DIR)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, "data", "quarterly")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-DATA_FOLDER = os.path.join(PARENT_DIR, "data", "quarterly")
-
-FULL_FILE = os.path.join(DATA_FOLDER, "eps_full.csv")
-PROCESSED_FILE = os.path.join(DATA_FOLDER, "eps_processed.csv")
+FULL_FILE = os.path.join(DATA_DIR, "eps_full.csv")
+PROCESSED_FILE = os.path.join(DATA_DIR, "eps_processed.csv")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-# -------------------------
-# ENSURE DIRECTORY
-# -------------------------
-def ensure_dirs():
-    os.makedirs(DATA_FOLDER, exist_ok=True)
 
 # -------------------------
 # GET SYMBOLS
@@ -133,8 +127,6 @@ def create_processed_data(df):
 # MAIN
 # -------------------------
 def main():
-    ensure_dirs()
-
     symbols = get_symbols()
     if not symbols:
         print("[ERROR] No symbols fetched")
