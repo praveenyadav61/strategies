@@ -137,7 +137,7 @@ def main():
 
     all_data = []
 
-    for sym in symbols[20:30]:
+    for sym in symbols[10:50]:
         print(f"[INFO] Processing {sym}")
 
         df = get_eps_data(sym)
@@ -145,7 +145,7 @@ def main():
         if df is not None:
             all_data.append(df)
 
-        time.sleep(0.8)
+        # time.sleep(0.8)
 
     if not all_data:
         print("[ERROR] No EPS data collected")
