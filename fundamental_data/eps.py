@@ -137,7 +137,7 @@ def main():
 
     all_data = []
 
-    for sym in symbols[:20]:
+    for sym in symbols[20:30]:
         print(f"[INFO] Processing {sym}")
 
         df = get_eps_data(sym)
