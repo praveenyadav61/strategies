@@ -70,7 +70,7 @@ def get_eps_data(full_symbol, retries=2):
                 df = tables[0]
 
                 eps_row = df[df.iloc[:, 0].str.contains('EPS in Rs', case=False, na=False)]
-
+                # print("eps row for ",full_symbol,eps_row)
                 if eps_row.empty:
                     return None
 
@@ -145,7 +145,7 @@ def main():
 
     all_data = []
 
-    for sym in symbols:
+    for sym in symbols[:20]:
         print(f"[INFO] Processing {sym}")
 
         df = get_eps_data(sym)
