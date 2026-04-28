@@ -16,7 +16,10 @@ FULL_FILE = os.path.join(DATA_DIR, "eps_full.csv")
 PROCESSED_FILE = os.path.join(DATA_DIR, "eps_processed.csv")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.google.com/",
+    "Connection": "keep-alive"
 }
 
 
