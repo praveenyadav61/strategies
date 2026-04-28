@@ -29,6 +29,35 @@ jobs:
       - name: Run EPS update script
         run: python fundamental_data/eps.py
 
+      # 🔥 DEBUG BLOCK (added)
+      - name: Debug everything
+        run: |
+          echo "----- CURRENT DIR -----"
+          pwd
+
+          echo "----- REPO FILES -----"
+          ls -R
+
+          echo "----- DATA FOLDER -----"
+          ls -R data || echo "data folder missing"
+
+          echo "----- QUARTERLY FOLDER -----"
+          ls -R data/quarterly || echo "quarterly folder missing"
+
+          echo "----- FILE COUNT -----"
+          find data -type f | wc -l || echo "no files"
+
+          echo "----- SAMPLE FILE CONTENT -----"
+          head -n 5 data/quarterly/eps_full.csv || echo "file not found"
+
+          echo "----- GIT STATUS BEFORE ADD -----"
+          git status
+
+          git add data/
+
+          echo "----- GIT STATUS AFTER ADD -----"
+          git status
+
       - name: Commit & push changes
         run: |
           git config user.name "github-actions"
