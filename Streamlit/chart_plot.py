@@ -414,6 +414,32 @@ class LayeredCupChart(LayeredPriceChart):
 
         return self
 
+    def add_pivot_marker(self, result_row, row=1, col=1):
+        if result_row is None or 'pivot_index' not in result_row:
+            return self
+    
+        pivot_date = result_row['pivot_index']
+        pivot_price = result_row['pivot_price']
+    
+        # Check if pivot_date exists in the dataframe index
+        if pivot_date not in self.df.index:
+            return self
+    
+        self.fig.add_trace(
+            go.Scatter(
+                x=[pivot_date],
+                y=[pivot_price],
+                mode="markers+text",
+                name="Pivot",
+                text=["Pivot"],
+                textposition="bottom center",
+                marker=dict(color="orange", size=12, symbol="diamond"),
+            ),
+            row=row,
+            col=col,
+        )
+        return self
+
     def add_eps(self, row=4, col=1):
         eps_df = pd.read_csv('data/quarterly/eps_processed.csv')
         eps_df = eps_df[eps_df['symbol']+".NS" == self.symbol]
@@ -435,7 +461,7 @@ class LayeredCupChart(LayeredPriceChart):
         return self
 
 
-def plot_cup_formation(df_weekly, symbol, params):
+def plot_cup_formation(df_weekly, symbol, params, result_row=None):
     chart = LayeredCupChart(df_weekly, symbol, params)
     return (
         chart
@@ -443,6 +469,7 @@ def plot_cup_formation(df_weekly, symbol, params):
         .add_price_moving_averages()
         .add_peak_low_markers()
         .add_tight_close_blocks()
+        .add_pivot_marker(result_row)  # This will now use the passed result_row
         .add_volume_bars()
         .add_volume_moving_averages()
         .add_rsi()
@@ -451,7 +478,6 @@ def plot_cup_formation(df_weekly, symbol, params):
         .update_axis_titles()
         .finalize()
     )
-
 
 def _prepare_trend_follower_data(df_daily):
     """Prepare daily data for the Trend Follower chart."""

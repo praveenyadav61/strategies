@@ -372,10 +372,11 @@ elif page == "Base Formation":
                     else:
                         st.info("Announcement data file was not found.")
 
-
+                    # Get the result row for the selected symbol
+                    result_row = bulk_df[bulk_df['Symbol'] == selected_symbol].iloc[0].to_dict() if not bulk_df.empty else None
 
                     # Generate and display the plot
-                    fig = plot_cup_formation(weekly_df, selected_symbol, params)
+                    fig = plot_cup_formation(weekly_df, selected_symbol, params, result_row=result_row)
                     st.plotly_chart(fig, use_container_width=True)
                     
                 except FileNotFoundError:
