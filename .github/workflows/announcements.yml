@@ -31,13 +31,11 @@ jobs:
         run: |
           python announcement.py
 
-      - name: Commit and push changes
+      - name: Commit & push changes
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add data/Announcements/announcements.parquet
-
-          git diff --cached --quiet || git commit -m "daily announcements update"
-
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git pull origin dev
+          git add data/Announcements
+          git diff --cached --quiet || git commit -m "Auto update data"
           git push origin dev
