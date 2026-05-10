@@ -1,0 +1,38 @@
+name: Daily Data Update
+
+on:
+  schedule:
+    - cron: "0 13 * * 1-5"   # 6:30 PM IST (weekdays)
+  workflow_dispatch:         # optional manual trigger
+permissions:
+  contents: write
+  
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo (dev branch)
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run data update script
+        run: python Streamlit/daily_breakout_scanner.py
+
+      - name: Commit & push changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git pull origin dev
+          git add data/
+          git diff --cached --quiet || git commit -m "Auto update data"
+          git push origin dev
