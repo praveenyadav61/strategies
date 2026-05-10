@@ -18,9 +18,10 @@ data_path = '../data/daily/'
 if not os.path.exists(data_path):
     data_path = 'data/daily/'
 
+ATH_THRESHOLD = 0.8
 DEFAULT_PARAMS = {
     'MIN_WEEKS': 8,
-    'MAX_WEEKS': 104,
+    'MAX_WEEKS': 52,
     'MIN_DEPTH': 0.15,
     'MAX_DEPTH': 0.40,
     'RECOVERY_MIN': 0.40,
@@ -42,12 +43,11 @@ def get_logger(debug=False):
 class ScanStats:
     def __init__(self):
         self.dma_filtered = []
+        self.ath_filtered = []
         self.min_depth = []
         self.duration = []
         self.near_high = []
         self.prior_uptrend = []
-        self.pivot = []
-
 # ---------------- INDICATORS ----------------
 def calculate_cup_metrics(df, params):
     df = df.copy()
@@ -85,34 +85,87 @@ def has_prior_uptrend(df, base_start_idx, left_high, bottom_price):
 
     return ret >= min_return
 
+def find_pivot(df, peak_idx, left_high, bottom_idx, bottom_price,
+               logger=None, symbol=None):
 
-def find_pivot(df, left_high, bottom_idx, bottom_price, logger=None):
     pivot = None
     pivot_idx = None
+
+    # valid pivot zone: +5% to -15% around left high
+    pivot_min = left_high * 0.85
+    pivot_max = left_high * 1.05
+
+    # scan right side of cup
+    for i in range(bottom_idx + 1, len(df) - 4):
+
+        curr_high = df.iloc[i]["High"]
+
+        # pivot should be near left high
+        if not (pivot_min <= curr_high <= pivot_max):
+            continue
+
+        # swing high (2 candles left + right)
+        if curr_high < df.iloc[i-2:i+3]["High"].max():
+            continue
+
+        # meaningful pullback after pivot
+        future_lows = df.iloc[i+1:i+5]["Low"]
+
+        drop = (curr_high - future_lows.min()) / curr_high
+
+        if not (0.05 <= drop <= 0.40):
+            continue
+
+        # pivot should still approximately act as resistance
+        future_highs = df.iloc[i+1:]["High"]
+
+        if future_highs.max() > curr_high * 1.02:
+            continue
+
+        pivot = curr_high
+        pivot_idx = i
+
+    if logger and pivot:
+        logger.debug(
+            f"Pivot: {pivot} for {symbol} at {df.index[pivot_idx]}"
+        )
+    # fallback -> left high itself
+    if pivot is None:
+        pivot = left_high
+        pivot_idx = peak_idx
+    return pivot, pivot_idx
+
+def find_pivot1(df, peak_idx, left_high, bottom_idx, bottom_price, logger=None, symbol=None):
+    pivot = None
+    pivot_idx = None
+    base_depth = left_high - bottom_price
 
     for i in range(bottom_idx + 1, len(df) - 4):
         curr_high = df.iloc[i]["High"]
 
-        if curr_high < left_high * 0.8:
+        if (curr_high - bottom_price) < base_depth * 0.6:
             continue
 
         if not (curr_high > df.iloc[i-1]["High"] and curr_high > df.iloc[i+1]["High"]):
             continue
 
         future_lows = df.iloc[i+1:i+5]["Low"]
-        drop = (curr_high - future_lows.min()) / curr_high
+        drop = (curr_high - future_lows.min()) / base_depth
 
-        if drop >= 0.05:
+        if drop >= 0.05 and drop <= 0.4:
             pivot = curr_high
             pivot_idx = i
-
-    if logger:
-        logger.debug(f"Pivot: {pivot} at idx {pivot_idx}")
+            break
+    if logger and pivot:
+        logger.debug(f"Pivot: {pivot} for {symbol} at idx {pivot_idx} with left high {left_high} and bottom {bottom_price}")
+    if pivot is None:
+        pivot = left_high
+        pivot_idx=  peak_idx
 
     return pivot, pivot_idx
 
 # ---------------- CORE LOGIC ----------------
-def check_cup_conditions(df, params, symbol, stats, logger):
+def check_cup_conditions(df, params, symbol, stats, logger, ath):
     try:
         window = df[-params['MAX_WEEKS']:]
 
@@ -122,6 +175,11 @@ def check_cup_conditions(df, params, symbol, stats, logger):
         after_peak = window.loc[peak_idx:]
         bottom_idx = after_peak['Low'].idxmin()
         bottom_price = after_peak.loc[bottom_idx, 'Low']
+        
+         # ATH filter
+        if peak_price < ath * ATH_THRESHOLD:
+            return None
+        stats.ath_filtered.append(symbol)
 
         # Depth
         depth = (peak_price - bottom_price) / peak_price
@@ -145,23 +203,24 @@ def check_cup_conditions(df, params, symbol, stats, logger):
         atr = window['atr']
         compression = atr.iloc[-params['COMPRESSION_LOOKBACK']:].mean() < atr.quantile(0.3)
 
-        # 🔥 Tight Closing (ADDED BACK)
+        # Tight Closing (ADDED BACK)
         close_window = window['Close'].iloc[-5:]
         tight_range = (close_window.max() - close_window.min()) / close_window.mean()
         tight_groups = int(tight_range < 0.05)   # 5% band
 
         # Prior uptrend
-        bottom_idx_i = df.index.get_loc(bottom_idx)
-        peak_idx_i = df.index.get_loc(peak_idx)
+        bottom_idx_i = window.index.get_loc(bottom_idx)
+        peak_idx_i = window.index.get_loc(peak_idx)
 
         prior_uptrend = has_prior_uptrend(df, peak_idx_i, peak_price, bottom_price)
         if prior_uptrend:
             stats.prior_uptrend.append(symbol)
 
         # Pivot
-        pivot, _ = find_pivot(window, peak_price, bottom_idx_i, bottom_price, logger)
-        if pivot:
-            stats.pivot.append(symbol)
+        pivot, pivot_idx_i = find_pivot(
+            window, peak_idx_i, peak_price, bottom_idx_i, bottom_price, logger, symbol
+        )        
+        pivot_index_label = window.index[pivot_idx_i]
 
         # ✅ FINAL FLAT RETURN
         return {
@@ -171,8 +230,10 @@ def check_cup_conditions(df, params, symbol, stats, logger):
             "Tight Groups": tight_groups,   # ✅ restored
             "compression": bool(compression),
             "prior_uptrend": bool(prior_uptrend),
-            "pivot": bool(pivot is not None),
-            "pivot_price": float(pivot) if pivot else None
+            "pivot_price": float(pivot),
+            "pivot_index": pivot_index_label,
+            "pivot_index_pos": int(pivot_idx_i),
+            "ATH": float(ath),
         }
 
     except Exception as e:
@@ -187,10 +248,13 @@ class CupScanner:
         self.logger = get_logger(debug)
         self.stats = ScanStats()
         self.data_engine = DataEngine()
+        self.data_path = data_path or globals()['data_path']
 
     def scan_symbol(self, symbol):
         try:
-            df = self.data_engine.get_symbol(symbol).tail(600)
+            df_full = self.data_engine.get_symbol(symbol)
+            ath = df_full[:-8]['High'].max()
+            df = df_full.tail(1000)
             df.index = pd.to_datetime(df.index)
             df = df.sort_index()
 
@@ -203,7 +267,6 @@ class CupScanner:
             close = df["Close"]
             ema200 = close.ewm(span=200).mean()
             ema50 = close.ewm(span=50).mean()
-
             if not (close.iloc[-1] > ema200.iloc[-1] and ema50.iloc[-1] > ema200.iloc[-1]):
                 return None
 
@@ -221,7 +284,7 @@ class CupScanner:
 
             weekly = calculate_cup_metrics(weekly, self.params)
             return check_cup_conditions(
-                weekly, self.params, symbol, self.stats, self.logger
+                weekly, self.params, symbol, self.stats, self.logger, ath
             )
 
         except Exception as e:
@@ -230,11 +293,11 @@ class CupScanner:
         return None
 
     def run_scan(self):
-        all_files = [f for f in os.listdir(data_path) if f.endswith('.parquet')]
+        all_files = [f for f in os.listdir(self.data_path) if f.endswith('.parquet')]
 
         results = []
 
-        for file in all_files:
+        for file in all_files[:]:
             symbol = file.replace('.parquet', '')
             res = self.scan_symbol(symbol)
 
@@ -251,7 +314,7 @@ class CupScanner:
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
 
-    DEBUG = True   # 🔥 toggle here
+    DEBUG = True   # toggle here
 
     scanner = CupScanner(DEFAULT_PARAMS, debug=DEBUG)
 
@@ -261,16 +324,17 @@ if __name__ == "__main__":
     print("Total Found:", len(df))
     print(df.head(20))
 
-    print("\n===== STATS =====")
-    print("DMA filtered:", len(scanner.stats.dma_filtered))
-    print("Min depth:", len(scanner.stats.min_depth))
-    print("Duration:", len(scanner.stats.duration))
-    print("Near high:", len(scanner.stats.near_high))
-    print("Prior uptrend:", len(scanner.stats.prior_uptrend))
-    print("Pivot:", len(scanner.stats.pivot))
+    # print("\n===== STATS =====")
+    # print("DMA filtered:", len(scanner.stats.dma_filtered))
+    # print("ATH filtered:", len(scanner.stats.ath_filtered))
+    # print("Min depth:", len(scanner.stats.min_depth))
+    # print("Duration:", len(scanner.stats.duration))
+    # print("Near high:", len(scanner.stats.near_high))
+    # print("Prior uptrend:", len(scanner.stats.prior_uptrend))
 
     # print("\all level stocks : ")
     # print("DMA Filtered:", scanner.stats.dma_filtered)
+    # print("ATH Filtered:", scanner.stats.ath_filtered)
     # print("Min Depth:", scanner.stats.min_depth)
     # print("Duration:", scanner.stats.duration)
     # print("Near High:", scanner.stats.near_high)

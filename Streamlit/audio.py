@@ -162,8 +162,16 @@ def _infer_extension(url: str, content_type: str | None) -> str:
 def _download_audio_to_temp(url: str, progress_callback: Callable[[str], None]) -> tuple[str, str]:
     progress_callback("Starting media download.")
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept": "audio/mpeg, audio/*;q=0.9, */*;q=0.8",
+        "Referer": "https://www.bluestarindia.com/",
+    }
+    
     with requests.get(
         url,
+        headers=headers,
         stream=True,
         timeout=(DOWNLOAD_CONNECT_TIMEOUT, DOWNLOAD_READ_TIMEOUT),
     ) as response:
