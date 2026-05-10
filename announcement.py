@@ -27,6 +27,107 @@ HEADERS = {
 
 SAVE_PATH = os.path.abspath("data/Announcements/announcements.parquet")
 
+SUBJECT_CLASSIFICATION_MAP = {
+    "analysts/institutional investor meet/con. call updates": "Investor",
+    "outcome of board meeting": "Board Meeting",
+    "general updates": "updates",
+    "updates": "updates",
+    "press release": "updates",
+    "investor presentation": "Investor",
+    "resignation": "updates",
+    "bagging/receiving of orders/contracts": "orders",
+    "credit rating": "Credit Rating",
+    "allotment of securities": "Bonus/Issue",
+    "record date": "Bonus/Issue",
+    "acquisition": "Bonus/Issue",
+    "amalgamation/merger": "Merger/Demerger",
+    "capacity addition": "Capacity Addition",
+    "awarding of order(s)/contract(s)": "orders",
+    "rights issue": "Bonus/Issue",
+    "bonus": "Bonus/Issue",
+    "preferential issue": "Bonus/Issue",
+    "stock split": "Bonus/Issue",
+    "demerger": "Merger/Demerger",
+    "buyback": "Bonus/Issue",
+    "public announcement - buyback of shares": "Bonus/Issue",
+}
+
+SUBJECT_CLASSIFICATION_PATTERNS = [
+    ("Investor", [
+        r"\banalysts?/institutional investor meet\b",
+        r"\bcon\.?\s*call\b",
+        r"\binvestor presentation\b",
+        r"\binvestor meet\b",
+        r"\binvestors?\b",
+        r"\bearnings call\b",
+    ]),
+    ("Board Meeting", [
+        r"\boutcome of board meeting\b",
+        r"\bboard meeting\b",
+        r"\bcommittee meeting\b",
+    ]),
+    ("orders", [
+        r"\bbagging/receiving of orders?/contracts?\b",
+        r"\bawarding of orders?/contracts?\b",
+        r"\borders?/contracts?\b",
+        r"\border\b",
+        r"\bcontract\b",
+    ]),
+    ("Credit Rating", [
+        r"\bcredit rating\b",
+        r"\brating\b",
+    ]),
+    ("Bonus/Issue", [
+        r"\ballotment of securities\b",
+        r"\brecord date\b",
+        r"\bacquisition\b",
+        r"\brights issue\b",
+        r"\bbonus\b",
+        r"\bpreferential issue\b",
+        r"\bstock split\b",
+        r"\bbuyback\b",
+        r"\bissue of securities\b",
+        r"\boptions to purchase securities\b",
+        r"\besop\b|\besos\b|\besps\b",
+    ]),
+    ("Merger/Demerger", [
+        r"\bamalgamation\b",
+        r"\bmerger\b",
+        r"\bdemerger\b",
+        r"\bscheme of arrangement\b",
+        r"\brestructuring\b",
+    ]),
+    ("Capacity Addition", [
+        r"\bcapacity addition\b",
+        r"\bcommencement of commercial production/operations\b",
+        r"\bcommercial production\b",
+        r"\bcapacity\b",
+    ]),
+    ("updates", [
+        r"\bgeneral updates\b",
+        r"\bupdates\b",
+        r"\bpress release\b",
+        r"\bresignation\b",
+        r"\bappointment\b",
+        r"\bchange in management\b",
+        r"\bchange in director",
+        r"\bcessation\b",
+        r"\bretirement\b",
+        r"\bchange in auditors?\b",
+        r"\bchange in company secretary/compliance officer\b",
+        r"\bmonthly business updates\b",
+        r"\bproduct launch\b",
+        r"\bincorporation\b",
+        r"\bclarification\b",
+        r"\bnews verification\b",
+        r"\brumour verification\b",
+        r"\bdisclosure of material issue\b",
+        r"\bagreements?\b",
+        r"\bmemorandum of understanding/agreements\b",
+        r"\bcorrigendum\b",
+    ]),
+]
+
 
 def parse_nse_datetime(series):
     parsed = pd.to_datetime(series, format="%Y-%m-%d %H:%M:%S", errors="coerce")
@@ -37,6 +138,29 @@ def parse_nse_datetime(series):
         pd.to_datetime(series, format="%d%m%Y%H%M%S", errors="coerce")
     )
     return parsed
+
+
+def apply_subject_classification(df):
+    if df.empty or "subject" not in df.columns:
+        return df
+
+    df = df.copy()
+    normalized_subject = df["subject"].astype(str).str.strip().str.lower()
+    classification = normalized_subject.map(SUBJECT_CLASSIFICATION_MAP)
+
+    for category, patterns in SUBJECT_CLASSIFICATION_PATTERNS:
+        pattern_mask = pd.Series(False, index=df.index)
+        for pattern in patterns:
+            pattern_mask = pattern_mask | normalized_subject.str.contains(
+                pattern,
+                case=False,
+                regex=True,
+                na=False,
+            )
+        classification = classification.mask(classification.isna() & pattern_mask, category)
+
+    df["classification"] = classification.fillna("Other")
+    return df
 
 # -----------------------------
 # SESSION
@@ -155,6 +279,8 @@ def clean_data(df):
         df["subject"] = df["subject"].astype(str).str.lower()
         df = df[~df["subject"].str.contains("dividend", case=False, na=False)]
 
+    df = apply_subject_classification(df)
+
     # clean text
     if "company_name" in df.columns:
         df["company_name"] = df["company_name"].astype(str).str.strip()
@@ -192,6 +318,7 @@ def load_existing_data():
         existing_df = pd.read_parquet(SAVE_PATH)
         if "date" in existing_df.columns:
             existing_df["date"] = pd.to_datetime(existing_df["date"], errors="coerce")
+        existing_df = apply_subject_classification(existing_df)
         return existing_df
     except Exception as e:
         print(f"Could not read existing parquet file: {e}")

@@ -16,7 +16,7 @@ if str(ROOT_DIR) not in sys.path:
 from modular_base_scanner import CupScanner
 from chart_plot import plot_cup_formation, plot_trend_follower_chart
 from trend_follower.final_trend_follower import EMAScanner
-from audio import load_saved_records, process_audio_request
+from audio import build_transcript_pdf, load_saved_records, process_audio_request
 
 
 def normalize_symbol_for_deals(symbol):
@@ -134,19 +134,38 @@ def get_audio_recording_announcements(announcement_df, limit=200):
 
     filtered_df = announcement_df.copy()
 
-    if "subject" not in filtered_df.columns or "attachment_text" not in filtered_df.columns:
+    required_cols = {"subject", "attachment_text", "attachment_url"}
+    if not required_cols.intersection(filtered_df.columns):
         return pd.DataFrame()
 
-    subject_series = filtered_df["subject"].astype(str).str.strip().str.lower()
-    attachment_series = filtered_df["attachment_text"]
-
-    mask = (
-        subject_series.eq("analysts/institutional investor meet/con. call updates")
-        & (
-            attachment_series.astype(str).str.lower().str.contains("link", na=False)
-            | attachment_series.isna()
-        )
+    subject_series = (
+        filtered_df["subject"].astype(str).str.strip().str.lower()
+        if "subject" in filtered_df.columns
+        else pd.Series("", index=filtered_df.index)
     )
+    attachment_text_series = (
+        filtered_df["attachment_text"].astype(str).str.strip().str.lower()
+        if "attachment_text" in filtered_df.columns
+        else pd.Series("", index=filtered_df.index)
+    )
+    attachment_url_series = (
+        filtered_df["attachment_url"].astype(str).str.strip().str.lower()
+        if "attachment_url" in filtered_df.columns
+        else pd.Series("", index=filtered_df.index)
+    )
+
+    combined_text = (
+        subject_series.fillna("")
+        + " "
+        + attachment_text_series.fillna("")
+        + " "
+        + attachment_url_series.fillna("")
+    )
+
+    has_audio = combined_text.str.contains("audio", na=False)
+    has_link = combined_text.str.contains("link", na=False) | attachment_url_series.str.startswith(("http://", "https://"), na=False)
+
+    mask = has_audio & has_link
 
     filtered_df = filtered_df[mask].sort_values(by="date", ascending=False)
     preferred_cols = [
@@ -163,7 +182,7 @@ def get_audio_recording_announcements(announcement_df, limit=200):
     return filtered_df.head(limit)
 
 
-def filter_by_date_and_symbol(df, date_col, symbol_col, start_date, end_date, selected_symbol):
+def filter_by_date_and_symbol(df, date_col, symbol_col, start_date, end_date, selected_symbol, selected_classification=None):
     if df.empty:
         return df
 
@@ -178,6 +197,15 @@ def filter_by_date_and_symbol(df, date_col, symbol_col, start_date, end_date, se
     if selected_symbol != "All" and symbol_col in filtered_df.columns:
         filtered_df = filtered_df[filtered_df[symbol_col] == selected_symbol]
 
+    if (
+        selected_classification is not None
+        and selected_classification != "All"
+        and "classification" in filtered_df.columns
+    ):
+        filtered_df = filtered_df[
+            filtered_df["classification"] == selected_classification
+        ]
+
     return filtered_df
 
 
@@ -189,6 +217,20 @@ def get_symbol_options(*frames, symbol_col):
                 df[symbol_col].dropna().astype(str).str.strip().tolist()
             )
     return ["All"] + sorted(symbol for symbol in symbols if symbol)
+
+
+def get_column_options(df, column_name):
+    if df.empty or column_name not in df.columns:
+        return ["All"]
+
+    values = (
+        df[column_name]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .tolist()
+    )
+    return ["All"] + sorted(value for value in set(values) if value)
 
 
 def load_daily_price_data(symbol):
@@ -392,7 +434,7 @@ elif page == "Announcements":
     if announcements_df.empty:
         st.warning("Announcement data file was not found or contains no rows.")
     else:
-        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        filter_col1, filter_col2, filter_col3,filter_col4 = st.columns(4)
         with filter_col1:
             start_date = st.date_input("Start Date", value=default_start_date, key="announcements_start_date")
         with filter_col2:
@@ -403,6 +445,12 @@ elif page == "Announcements":
                 options=get_symbol_options(announcements_df, symbol_col="symbol"),
                 key="announcements_symbol",
             )
+        with filter_col4:
+            selected_classification = st.selectbox(
+                "Select Classification",
+                options=get_column_options(announcements_df, "classification"),
+                key="announcements_classification",
+            )
 
         display_announcements_df = filter_by_date_and_symbol(
             announcements_df,
@@ -411,6 +459,8 @@ elif page == "Announcements":
             start_date=start_date,
             end_date=end_date,
             selected_symbol=selected_symbol,
+            selected_classification=selected_classification
+
         )
         display_announcements_df = format_announcements_table(display_announcements_df)
         st.caption(f"Showing {len(display_announcements_df)} announcements.")
@@ -431,7 +481,7 @@ elif page == "Announcements":
 
 elif page == "Audio Transcript":
     st.title("Audio Transcript")
-    st.info("Use Gemini to generate a cleaned transcript and structured summary from an NSE audio link.")
+    st.info("Use Gemini to generate a cleaned transcript and structured summary from an NSE audio or mp4 link.")
 
     st.subheader("Recent Audio Recording Announcements")
     if announcements_df.empty:
@@ -458,7 +508,7 @@ elif page == "Audio Transcript":
         gemini_api_key = st.text_input("Gemini API Key", type="password")
         symbol = st.text_input("Symbol", placeholder="For example, HAL.NS")
         company_name = st.text_input("Company Name", placeholder="For example, Hindustan Aeronautics")
-        audio_url = st.text_input("NSE Audio URL", placeholder="Paste mp3, wav, or m4a audio link")
+        audio_url = st.text_input("NSE Audio URL", placeholder="Paste mp3, wav, m4a, or mp4 link")
         submitted = st.form_submit_button("Generate Transcript and Summary")
 
     log_placeholder = st.empty()
@@ -489,6 +539,16 @@ elif page == "Audio Transcript":
                 st.success("Transcript and summary generated successfully.")
 
             st.caption(f"Saved to {result['save_path']}")
+
+            pdf_bytes = build_transcript_pdf(record)
+            pdf_name_symbol = (record.get("symbol") or "transcript").replace("/", "_")
+            st.download_button(
+                "Download PDF",
+                data=pdf_bytes,
+                file_name=f"{pdf_name_symbol}_transcript_summary.pdf",
+                mime="application/pdf",
+                use_container_width=False,
+            )
 
             with st.expander("Transcript", expanded=True):
                 st.code(record["transcript"], language="markdown")
