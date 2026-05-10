@@ -7,6 +7,9 @@ on:
 
   workflow_dispatch:
 
+permissions:
+  contents: write
+  
 jobs:
   announcements:
     runs-on: ubuntu-22.04
