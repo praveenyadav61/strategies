@@ -84,29 +84,40 @@ def load_existing_breakouts(path):
 def save_breakouts(df, path):
     if df.empty:
         return
-    df = df.drop_duplicates(subset=["symbol", "pivot_price"], keep="last")
-    df = df.sort_values(by=["date", "symbol"], ascending=[False, True])
+    # force datetime conversion
+    df["date"] = pd.to_datetime(df["date"])
+    df["scan_date"] = pd.to_datetime(df["scan_date"])
+    # remove duplicates
+    df = df.drop_duplicates(
+        subset=["symbol", "pivot_price"],
+        keep="last"
+    )
+    # latest first
+    df = df.sort_values(
+        by=["date", "symbol"],
+        ascending=[False, True]
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
 
 def notify_new_breakouts(breakout_df):
-
     import requests
-
-    BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-    if not BOT_TOKEN or not CHAT_ID:
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram credentials not found.")
         return
-
     now = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
-
+    # no breakouts
     if breakout_df.empty:
-        print("No new breakout notifications to send.")
-        return
+        message = (
+            f"Daily Pivot Breakouts\n"
+            f"{now}\n\n"
+            f"No new breakouts detected today."
+        )
     else:
         lines = [
-            f" Daily Pivot Breakouts",
+            f"Daily Pivot Breakouts",
             f"{now}",
             ""
         ]
@@ -121,18 +132,18 @@ def notify_new_breakouts(breakout_df):
             lines.append(
                 f"• {row['symbol']}\n"
                 f"Pivot: {row['pivot_price']:.2f}\n"
-                f"Close: {row['close_today']:.2f} ({breakout_pct:.2f}%)\n"
-                f"Depth: {row['depth']:.2f}\n"
+                f"Close: {row['close_today']:.2f} "
+                f"({breakout_pct:.2f}%)\n"
             )
 
-    message = "\n".join(lines)
+        message = "\n".join(lines)
 
     print(message)
 
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
     payload = {
-        "chat_id": CHAT_ID,
+        "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
     }
 
@@ -151,32 +162,34 @@ def run_daily_breakout_scan(debug=False):
     scanner = CupScanner(DEFAULT_PARAMS, debug=debug)
     base_df = scanner.run_scan()
 
-    #uncomment below
-    # if base_df.empty:
-    #     print("No cup bases found.")
-    #     return
+    # uncomment below
+    if base_df.empty:
+        print("No cup bases found.")
+        return
 
-    # breakout_df = detect_breakouts(base_df)
-    # if breakout_df.empty:
-    #     print("No daily pivot breakouts detected today.")
-    #     
+    breakout_df = detect_breakouts(base_df)
+    if breakout_df.empty:
+        notify_new_breakouts(breakout_df)
+        print("No daily pivot breakouts detected today.")
+        return
+        
     
     #comment 
-    breakout_df = pd.DataFrame([
-        {
-            "date": pd.Timestamp.today(),
-            "symbol": "RELIANCE",
-            "pivot_price": 2450.0,
-            "pivot_index": "2026-04-12",
-            "pivot_index_pos": 45,
-            "close_prev": 2440.0,
-            "close_today": 2485.0,
-            "depth": 0.22,
-            "recovery": 0.91,
-            "ath": 2600.0,
-            "scan_date": pd.Timestamp.now(),
-        }
-    ])
+    # breakout_df = pd.DataFrame([
+    #     {
+    #         "date": pd.Timestamp.today(),
+    #         "symbol": "RELIANCE",
+    #         "pivot_price": 2450.0,
+    #         "pivot_index": "2026-04-12",
+    #         "pivot_index_pos": 45,
+    #         "close_prev": 2440.0,
+    #         "close_today": 2485.0,
+    #         "depth": 0.22,
+    #         "recovery": 0.91,
+    #         "ath": 2600.0,
+    #         "scan_date": pd.Timestamp.now(),
+    #     }
+    # ])
 
 
     existing_df = load_existing_breakouts(OUTPUT_FILE)

@@ -297,7 +297,7 @@ class CupScanner:
 
         results = []
 
-        for file in all_files[:2]:
+        for file in all_files[:]:
             symbol = file.replace('.parquet', '')
             res = self.scan_symbol(symbol)
 
@@ -329,8 +329,8 @@ if __name__ == "__main__":
     # print("ATH filtered:", len(scanner.stats.ath_filtered))
     # print("Min depth:", len(scanner.stats.min_depth))
     # print("Duration:", len(scanner.stats.duration))
-    print("Near high:", len(scanner.stats.near_high))
-    print("Prior uptrend:", len(scanner.stats.prior_uptrend))
+    # print("Near high:", len(scanner.stats.near_high))
+    # print("Prior uptrend:", len(scanner.stats.prior_uptrend))
 
     # print("\all level stocks : ")
     # print("DMA Filtered:", scanner.stats.dma_filtered)
