@@ -2,8 +2,11 @@ import json
 import logging
 import mimetypes
 import os
+import shutil
+import subprocess
 import tempfile
 import time
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -15,7 +18,7 @@ import requests
 LOGGER = logging.getLogger(__name__)
 
 DATA_DIR = Path("data/transcripter")
-ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a"}
+ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".mp4"}
 ALLOWED_CONTENT_TYPES = {
     "audio/mpeg",
     "audio/mp3",
@@ -24,6 +27,7 @@ ALLOWED_CONTENT_TYPES = {
     "audio/mp4",
     "audio/x-m4a",
     "audio/m4a",
+    "video/mp4",
 }
 DOWNLOAD_CONNECT_TIMEOUT = 15
 DOWNLOAD_READ_TIMEOUT = 180
@@ -32,12 +36,13 @@ LOG_EVERY_BYTES = 5 * 1024 * 1024
 FILE_PROCESSING_TIMEOUT_SECONDS = 300
 FILE_POLL_INTERVAL_SECONDS = 5
 DEFAULT_MODEL_NAME = "gemini-2.5-flash"
+EXTRACTED_AUDIO_MIME_TYPE = "audio/mpeg"
 
 TRANSCRIPTION_PROMPT = """ROLE
-You are an Expert Transcription Editor. Your goal is to listen to the provided audio file and generate a clean, verbatim, and readable transcript.
+You are an Expert Transcription Editor. Your goal is to listen to the provided media file and generate a clean, verbatim, and readable transcript.
 
 INSTRUCTIONS
-Transcribe the audio provided in the file.
+Transcribe the spoken audio from the provided file.
 Return Markdown only.
 Remove filler words (um, ah, like, you know) and stutters while maintaining 100% factual integrity.
 Organize the text into logical paragraphs based on topic shifts.
@@ -148,11 +153,14 @@ def _infer_extension(url: str, content_type: str | None) -> str:
             if normalized_type in {"audio/wav", "audio/x-wav"}:
                 return ".wav"
 
-    raise ValueError("Unsupported audio format. Only mp3, wav, and m4a are supported.")
+            if normalized_type == "video/mp4":
+                return ".mp4"
+
+    raise ValueError("Unsupported media format. Only mp3, wav, m4a, and mp4 are supported.")
 
 
 def _download_audio_to_temp(url: str, progress_callback: Callable[[str], None]) -> tuple[str, str]:
-    progress_callback("Starting audio download.")
+    progress_callback("Starting media download.")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -197,10 +205,86 @@ def _download_audio_to_temp(url: str, progress_callback: Callable[[str], None]) 
                     next_log_at += LOG_EVERY_BYTES
 
     if downloaded_bytes == 0:
-        raise ValueError("Downloaded audio file is empty.")
+        raise ValueError("Downloaded media file is empty.")
 
     progress_callback(f"Download finished. Temporary file saved with {downloaded_bytes} bytes.")
     return temp_path, (mime_type or "audio/mpeg")
+
+
+def _resolve_ffmpeg_executable() -> str:
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return ffmpeg_path
+
+    try:
+        import imageio_ffmpeg
+    except ImportError as exc:
+        raise RuntimeError(
+            "MP4 support requires ffmpeg. Install a system ffmpeg binary or add the "
+            "`imageio-ffmpeg` Python package to the environment."
+        ) from exc
+
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _maybe_extract_audio(
+    media_path: str,
+    mime_type: str,
+    progress_callback: Callable[[str], None],
+) -> tuple[str, str, list[str]]:
+    cleanup_paths = [media_path]
+    media_suffix = Path(media_path).suffix.lower()
+
+    if media_suffix != ".mp4" and mime_type != "video/mp4":
+        return media_path, mime_type, cleanup_paths
+
+    ffmpeg_executable = _resolve_ffmpeg_executable()
+    extracted_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    extracted_audio.close()
+    extracted_audio_path = extracted_audio.name
+
+    progress_callback("MP4 detected. Extracting audio track locally before Gemini upload.")
+    command = [
+        ffmpeg_executable,
+        "-y",
+        "-i",
+        media_path,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-b:a",
+        "64k",
+        extracted_audio_path,
+    ]
+
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        if os.path.exists(extracted_audio_path):
+            os.remove(extracted_audio_path)
+        raise RuntimeError(f"Could not run ffmpeg for MP4 audio extraction: {exc}") from exc
+
+    if completed.returncode != 0:
+        if os.path.exists(extracted_audio_path):
+            os.remove(extracted_audio_path)
+        stderr = completed.stderr.strip() or completed.stdout.strip() or "Unknown ffmpeg error."
+        raise RuntimeError(f"ffmpeg failed while extracting audio from MP4: {stderr}")
+
+    if not os.path.exists(extracted_audio_path) or os.path.getsize(extracted_audio_path) == 0:
+        if os.path.exists(extracted_audio_path):
+            os.remove(extracted_audio_path)
+        raise RuntimeError("ffmpeg completed but did not produce a usable audio file from the MP4.")
+
+    cleanup_paths.append(extracted_audio_path)
+    progress_callback("Audio extraction completed. Uploading the extracted speech-only audio file.")
+    return extracted_audio_path, EXTRACTED_AUDIO_MIME_TYPE, cleanup_paths
 
 
 def _create_client(api_key: str):
@@ -210,7 +294,7 @@ def _create_client(api_key: str):
 
 def _upload_audio_file(client, audio_path: str, mime_type: str, progress_callback: Callable[[str], None]):
     _, types = _import_google_genai()
-    progress_callback("Uploading audio to Gemini File API.")
+    progress_callback("Uploading media file to Gemini File API.")
     return client.files.upload(
         file=audio_path,
         config=types.UploadFileConfig(
@@ -221,7 +305,7 @@ def _upload_audio_file(client, audio_path: str, mime_type: str, progress_callbac
 
 
 def _wait_for_file_active(client, uploaded_file, progress_callback: Callable[[str], None]):
-    progress_callback("Waiting for Gemini to finish processing the audio file.")
+    progress_callback("Waiting for Gemini to finish processing the media file.")
     started_at = time.time()
     current_file = uploaded_file
 
@@ -233,10 +317,10 @@ def _wait_for_file_active(client, uploaded_file, progress_callback: Callable[[st
             return current_file
 
         if state_name == "FAILED":
-            raise RuntimeError("Gemini File API failed to process the uploaded audio.")
+            raise RuntimeError("Gemini File API failed to process the uploaded media file.")
 
         if time.time() - started_at > FILE_PROCESSING_TIMEOUT_SECONDS:
-            raise TimeoutError("Timed out while waiting for Gemini to process the audio file.")
+            raise TimeoutError("Timed out while waiting for Gemini to process the media file.")
 
         progress_callback(f"Current Gemini file state: {state_name or 'PROCESSING'}. Polling again soon.")
         time.sleep(FILE_POLL_INTERVAL_SECONDS)
@@ -266,6 +350,76 @@ def transcribe_from_url(url: str) -> str:
     raise NotImplementedError(
         "This project now uses Gemini and requires an API key. Use process_audio_request(...) instead."
     )
+
+
+def build_transcript_pdf(record: dict) -> bytes:
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+    except ImportError as exc:
+        raise ImportError(
+            "PDF export requires reportlab. Install it with `pip install reportlab`."
+        ) from exc
+
+    def normalize_text(value: str) -> str:
+        text = str(value or "")
+        text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        return text
+
+    def append_multiline_text(story: list, text: str, style) -> None:
+        normalized = normalize_text(text)
+        paragraphs = [part.strip() for part in normalized.split("\n\n") if part.strip()]
+        if not paragraphs and normalized.strip():
+            paragraphs = [normalized.strip()]
+        for paragraph in paragraphs:
+            story.append(Paragraph(paragraph.replace("\n", "<br/>"), style))
+            story.append(Spacer(1, 0.12 * inch))
+
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=0.6 * inch,
+        rightMargin=0.6 * inch,
+        topMargin=0.6 * inch,
+        bottomMargin=0.6 * inch,
+    )
+    styles = getSampleStyleSheet()
+    title_style = styles["Title"]
+    heading_style = styles["Heading2"]
+    body_style = styles["BodyText"]
+
+    symbol = record.get("symbol", "")
+    company_name = record.get("company_name", "")
+    title = company_name or symbol or "Transcript Report"
+
+    story = [
+        Paragraph(normalize_text(title), title_style),
+        Spacer(1, 0.18 * inch),
+    ]
+
+    metadata_lines = [
+        f"Symbol: {symbol or 'N/A'}",
+        f"Company: {company_name or 'N/A'}",
+        f"Created At: {record.get('created_at', 'N/A')}",
+        f"Audio URL: {record.get('audio_url', 'N/A')}",
+        f"Model: {record.get('model', 'N/A')}",
+    ]
+    append_multiline_text(story, "\n".join(metadata_lines), body_style)
+
+    story.append(Paragraph("Summary", heading_style))
+    story.append(Spacer(1, 0.12 * inch))
+    append_multiline_text(story, record.get("summary", ""), body_style)
+
+    story.append(Paragraph("Transcript", heading_style))
+    story.append(Spacer(1, 0.12 * inch))
+    append_multiline_text(story, record.get("transcript", ""), body_style)
+
+    document.build(story)
+    return buffer.getvalue()
 
 
 def _symbol_file_path(symbol: str) -> Path:
@@ -339,12 +493,19 @@ def process_audio_request(
             }
 
     temp_path = None
+    cleanup_paths: list[str] = []
     uploaded_file = None
+    client = None
 
     try:
         temp_path, mime_type = _download_audio_to_temp(normalized_url, progress)
+        upload_path, upload_mime_type, cleanup_paths = _maybe_extract_audio(
+            temp_path,
+            mime_type,
+            progress,
+        )
         client = _create_client(normalized_key)
-        uploaded_file = _upload_audio_file(client, temp_path, mime_type, progress)
+        uploaded_file = _upload_audio_file(client, upload_path, upload_mime_type, progress)
         uploaded_file = _wait_for_file_active(client, uploaded_file, progress)
 
         transcript = _generate_text(
@@ -387,13 +548,15 @@ def process_audio_request(
             raise RuntimeError("Gemini authentication failed. Please verify the API key.") from exc
         raise
     finally:
-        if uploaded_file is not None:
+        if uploaded_file is not None and client is not None:
             try:
                 client.files.delete(name=uploaded_file.name)
                 progress("Deleted uploaded Gemini file.")
             except Exception:
                 progress("Could not delete the uploaded Gemini file, but local processing is complete.")
 
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
-            progress("Temporary audio file removed.")
+        for path in reversed(cleanup_paths or ([temp_path] if temp_path else [])):
+            if path and os.path.exists(path):
+                os.remove(path)
+        if cleanup_paths:
+            progress("Temporary media files removed.")

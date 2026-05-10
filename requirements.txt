@@ -1,3 +1,5 @@
+# System dependency note: MP4 support in Streamlit/audio.py uses `ffmpeg` when available.
+# For hosted Linux environments, install ffmpeg at the OS level or rely on `imageio-ffmpeg`.
 altair==6.0.0
 attrs==25.4.0
 beautifulsoup4==4.14.3
@@ -42,6 +44,7 @@ pyparsing==3.3.2
 python-dateutil==2.9.0.post0
 pytz==2025.2
 referencing==0.37.0
+reportlab
 requests==2.32.5
 rpds-py==0.30.0
 scipy==1.17.0
@@ -60,3 +63,4 @@ watchdog==6.0.0
 websockets==16.0
 yfinance==1.1.0
 google-genai
+imageio-ffmpeg
