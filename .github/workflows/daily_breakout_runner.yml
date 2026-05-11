@@ -2,7 +2,7 @@ name: Daily Breakout Scan
 
 on:
   schedule:
-    - cron: "0 13 * * 1-5"   # 6:30 PM IST (weekdays)
+    - cron: "13 14 * * 1-5"  
   workflow_dispatch:         # optional manual trigger
 permissions:
   contents: write
