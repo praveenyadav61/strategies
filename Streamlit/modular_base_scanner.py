@@ -23,7 +23,7 @@ DEFAULT_PARAMS = {
     'MIN_WEEKS': 8,
     'MAX_WEEKS': 52,
     'MIN_DEPTH': 0.15,
-    'MAX_DEPTH': 0.40,
+    'MAX_DEPTH': 0.50,
     'RECOVERY_MIN': 0.40,
     'RECOVERY_MAX': 1.20,
     'ATR_WINDOW': 14,
@@ -105,7 +105,7 @@ def find_pivot(df, peak_idx, left_high, bottom_idx, bottom_price,
             continue
 
         # swing high (2 candles left + right)
-        if curr_high < df.iloc[i-2:i+3]["High"].max():
+        if curr_high < df.iloc[i-1:i+2]["High"].max():
             continue
 
         # meaningful pullback after pivot
@@ -253,6 +253,7 @@ class CupScanner:
     def scan_symbol(self, symbol):
         try:
             df_full = self.data_engine.get_symbol(symbol)
+            # df_full = self.data_engine.get_symbol(symbol, end="2026-05-08")
             ath = df_full[:-8]['High'].max()
             df = df_full.tail(1000)
             df.index = pd.to_datetime(df.index)
