@@ -63,6 +63,12 @@ def load_earnings_data():
     """Load the aggregated earnings CSV."""
     print(f"[INFO] Loading earnings data from {AGG_CSV}")
     df = pd.read_csv(AGG_CSV)
+    df = (
+        df.drop_duplicates(
+            subset=["ticker", "quarter_label"],
+            keep="last"
+        )
+    )
     print(f"[INFO] Total rows: {len(df)}")
     return df
 
@@ -189,7 +195,7 @@ def get_previous_quarter_data(df, quarter_label, suffix):
 # =========================================================
 
 
-def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suffix, prev_qoq_suffix):
+def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suffix, prev_qoq_suffix, total_companies):
     """
     Merge current quarter data with YoY and QoQ comparison data.
     """
@@ -204,12 +210,12 @@ def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suf
     qoq_profit_col = f"net_profit_{prev_qoq_suffix}"
     qoq_op_col = f"operating_profit_{prev_qoq_suffix}"
 
-    merged["revenue_yoy_growth"] = None
-    merged["profit_yoy_growth"] = None
-    merged["operating_profit_yoy_growth"] = None
-    merged["revenue_qoq_growth"] = None
-    merged["profit_qoq_growth"] = None
-    merged["operating_profit_qoq_growth"] = None
+    merged["revenue_yoy_growth"] = pd.NA
+    merged["profit_yoy_growth"] = pd.NA
+    merged["operating_profit_yoy_growth"] = pd.NA
+    merged["revenue_qoq_growth"] = pd.NA
+    merged["profit_qoq_growth"] = pd.NA
+    merged["operating_profit_qoq_growth"] = pd.NA
 
     valid_revenue_yoy = merged[yoy_revenue_col].notna() & (merged[yoy_revenue_col] > 0)
     merged.loc[valid_revenue_yoy, "revenue_yoy_growth"] = (
@@ -217,14 +223,14 @@ def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suf
          / merged.loc[valid_revenue_yoy, yoy_revenue_col]) * 100
     )
 
-    valid_profit_yoy = merged[yoy_profit_col].notna() & (merged[yoy_profit_col] > 0)
+    valid_profit_yoy = merged[yoy_profit_col].notna() & (merged[yoy_profit_col] != 0)
     merged.loc[valid_profit_yoy, "profit_yoy_growth"] = (
         ((merged.loc[valid_profit_yoy, "net_profit"] - merged.loc[valid_profit_yoy, yoy_profit_col])
-         / merged.loc[valid_profit_yoy, yoy_profit_col]) * 100
+         / merged.loc[valid_profit_yoy, yoy_profit_col].abs()) * 100
     )
 
     valid_op_yoy = pd.Series(False, index=merged.index)
-    if yoy_op_col in merged:
+    if yoy_op_col in merged.columns:
         valid_op_yoy = merged[yoy_op_col].notna() & (merged[yoy_op_col] > 0)
         merged.loc[valid_op_yoy, "operating_profit_yoy_growth"] = (
             ((merged.loc[valid_op_yoy, "operating_profit"] - merged.loc[valid_op_yoy, yoy_op_col])
@@ -237,14 +243,14 @@ def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suf
          / merged.loc[valid_revenue_qoq, qoq_revenue_col]) * 100
     )
 
-    valid_profit_qoq = merged[qoq_profit_col].notna() & (merged[qoq_profit_col] > 0)
+    valid_profit_qoq = merged[qoq_profit_col].notna() & (merged[qoq_profit_col] != 0)
     merged.loc[valid_profit_qoq, "profit_qoq_growth"] = (
         ((merged.loc[valid_profit_qoq, "net_profit"] - merged.loc[valid_profit_qoq, qoq_profit_col])
-         / merged.loc[valid_profit_qoq, qoq_profit_col]) * 100
+         / merged.loc[valid_profit_qoq, qoq_profit_col].abs()) * 100
     )
 
     valid_op_qoq = pd.Series(False, index=merged.index)
-    if qoq_op_col in merged:
+    if qoq_op_col in merged.columns:
         valid_op_qoq = merged[qoq_op_col].notna() & (merged[qoq_op_col] > 0)
         merged.loc[valid_op_qoq, "operating_profit_qoq_growth"] = (
             ((merged.loc[valid_op_qoq, "operating_profit"] - merged.loc[valid_op_qoq, qoq_op_col])
@@ -259,13 +265,14 @@ def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suf
     merged[f"weighted_profit_{prev_qoq_suffix}"] = merged[qoq_profit_col] * merged["weight"]
     if "operating_profit" in merged:
         merged["weighted_operating_profit"] = merged["operating_profit"] * merged["weight"]
-    if yoy_op_col in merged:
+    if yoy_op_col in merged.columns:
         merged[f"weighted_operating_profit_{prev_yoy_suffix}"] = merged[yoy_op_col] * merged["weight"]
-    if qoq_op_col in merged:
+    if qoq_op_col in merged.columns:
         merged[f"weighted_operating_profit_{prev_qoq_suffix}"] = merged[qoq_op_col] * merged["weight"]
 
     summary = {
         "declared_count": len(merged),
+        "total_companies": total_companies,
         "declared_weight_pct": merged["weight"].sum() * 100,
 
         "normal_revenue_yoy_growth_pct": None,
@@ -297,10 +304,40 @@ def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suf
             ((total_weighted_revenue - total_weighted_revenue_yoy) / total_weighted_revenue_yoy) * 100
         )
 
-    total_profit = merged.loc[valid_profit_yoy, "net_profit"].sum()
-    total_profit_yoy = merged.loc[valid_profit_yoy, yoy_profit_col].sum()
-    total_weighted_profit = merged.loc[valid_profit_yoy, "weighted_profit"].sum()
-    total_weighted_profit_yoy = merged.loc[valid_profit_yoy, f"weighted_profit_{prev_yoy_suffix}"].sum()
+    #####################profit##############################
+    # PAT summary universe:
+    # Only companies profitable in both periods
+    valid_profit_yoy_summary = (
+        merged[yoy_profit_col].notna()
+        & (merged[yoy_profit_col] > 0)
+        & (merged["net_profit"] > 0)
+    )
+
+    valid_profit_qoq_summary = (
+        merged[qoq_profit_col].notna()
+        & (merged[qoq_profit_col] > 0)
+        & (merged["net_profit"] > 0)
+    )
+
+    total_profit = merged.loc[
+        valid_profit_yoy_summary,
+        "net_profit"
+    ].sum()
+
+    total_profit_yoy = merged.loc[
+        valid_profit_yoy_summary,
+        yoy_profit_col
+    ].sum()
+
+    total_weighted_profit = merged.loc[
+        valid_profit_yoy_summary,
+        "weighted_profit"
+    ].sum()
+
+    total_weighted_profit_yoy = merged.loc[
+        valid_profit_yoy_summary,
+        f"weighted_profit_{prev_yoy_suffix}"
+    ].sum()
 
     if total_profit_yoy != 0:
         summary["normal_profit_yoy_growth_pct"] = (
@@ -311,7 +348,7 @@ def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suf
             ((total_weighted_profit - total_weighted_profit_yoy) / total_weighted_profit_yoy) * 100
         )
 
-    if yoy_op_col in merged:
+    if yoy_op_col in merged.columns:
         total_op = merged.loc[valid_op_yoy, "operating_profit"].sum()
         total_op_yoy = merged.loc[valid_op_yoy, yoy_op_col].sum()
         total_weighted_op = merged.loc[valid_op_yoy, "weighted_operating_profit"].sum()
@@ -339,10 +376,25 @@ def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suf
             ((total_weighted_revenue_qoq - total_weighted_revenue_qoq_prev) / total_weighted_revenue_qoq_prev) * 100
         )
 
-    total_profit_qoq = merged.loc[valid_profit_qoq, "net_profit"].sum()
-    total_profit_qoq_prev = merged.loc[valid_profit_qoq, qoq_profit_col].sum()
-    total_weighted_profit_qoq = merged.loc[valid_profit_qoq, "weighted_profit"].sum()
-    total_weighted_profit_qoq_prev = merged.loc[valid_profit_qoq, f"weighted_profit_{prev_qoq_suffix}"].sum()
+    total_profit_qoq = merged.loc[
+        valid_profit_qoq_summary,
+        "net_profit"
+    ].sum()
+
+    total_profit_qoq_prev = merged.loc[
+        valid_profit_qoq_summary,
+        qoq_profit_col
+    ].sum()
+
+    total_weighted_profit_qoq = merged.loc[
+        valid_profit_qoq_summary,
+        "weighted_profit"
+    ].sum()
+
+    total_weighted_profit_qoq_prev = merged.loc[
+        valid_profit_qoq_summary,
+        f"weighted_profit_{prev_qoq_suffix}"
+    ].sum()
 
     if total_profit_qoq_prev != 0:
         summary["normal_profit_qoq_growth_pct"] = (
@@ -353,7 +405,7 @@ def calculate_growth_metrics(declared_df, prev_yoy_df, prev_qoq_df, prev_yoy_suf
             ((total_weighted_profit_qoq - total_weighted_profit_qoq_prev) / total_weighted_profit_qoq_prev) * 100
         )
 
-    if qoq_op_col in merged:
+    if qoq_op_col in merged.columns:
         total_op_qoq = merged.loc[valid_op_qoq, "operating_profit"].sum()
         total_op_qoq_prev = merged.loc[valid_op_qoq, qoq_op_col].sum()
         total_weighted_op_qoq = merged.loc[valid_op_qoq, "weighted_operating_profit"].sum()
@@ -414,12 +466,14 @@ def generate_analysis(merged_df, summary, index_name, current_quarter, previous_
         op_yoy = row.get("operating_profit_yoy_growth")
         op_qoq_growth = row.get("operating_profit_qoq_growth")
 
-        rev_yoy_str = f"{rev_yoy:.2f}%" if rev_yoy is not None else "N/A"
-        rev_qoq_str = f"{rev_qoq:.2f}%" if rev_qoq is not None else "N/A"
-        profit_yoy_str = f"{profit_yoy:.2f}%" if profit_yoy is not None else "N/A"
-        profit_qoq_str = f"{profit_qoq:.2f}%" if profit_qoq is not None else "N/A"
-        op_yoy_str = f"{op_yoy:.2f}%" if op_yoy is not None else "N/A"
-        op_qoq_str = f"{op_qoq_growth:.2f}%" if op_qoq_growth is not None else "N/A"
+        rev_yoy_str = f"{rev_yoy:.2f}%" if pd.notna(rev_yoy) else "N/A"
+        rev_qoq_growth = row.get("revenue_qoq_growth")
+        rev_qoq_str = f"{rev_qoq_growth:.2f}%" if pd.notna(rev_qoq_growth) else "N/A"
+        profit_yoy_str = f"{profit_yoy:.2f}%" if pd.notna(profit_yoy) else "N/A"
+        profit_qoq_growth = row.get("profit_qoq_growth")
+        profit_qoq_str = f"{profit_qoq_growth:.2f}%" if pd.notna(profit_qoq_growth) else "N/A"
+        op_yoy_str = f"{op_yoy:.2f}%" if pd.notna(op_yoy) else "N/A"
+        op_qoq_str = f"{op_qoq_growth:.2f}%" if pd.notna(op_qoq_growth) else "N/A"
 
         log_line = (
             f"{ticker:<15} {rev_cur:>10.0f} {rev_py if rev_py else 0:>10.0f} {rev_yoy_str:>10} "
@@ -429,52 +483,7 @@ def generate_analysis(merged_df, summary, index_name, current_quarter, previous_
         )
         logs.append(log_line)
 
-    # Summary statistics
-    logs.append("\n" + "=" * 100)
-    logs.append(f"Summary Statistics - YoY ({current_quarter} vs {previous_quarter_yoy}):")
-    logs.append("=" * 100)
-
-    avg_rev_yoy = merged_df[merged_df["revenue_yoy_growth"].notna()]["revenue_yoy_growth"].mean()
-    avg_profit_yoy = merged_df[merged_df["profit_yoy_growth"].notna()]["profit_yoy_growth"].mean()
-    avg_op_yoy = merged_df[merged_df["operating_profit_yoy_growth"].notna()]["operating_profit_yoy_growth"].mean()
-    median_rev_yoy = merged_df[merged_df["revenue_yoy_growth"].notna()]["revenue_yoy_growth"].median()
-    median_profit_yoy = merged_df[merged_df["profit_yoy_growth"].notna()]["profit_yoy_growth"].median()
-    median_op_yoy = merged_df[merged_df["operating_profit_yoy_growth"].notna()]["operating_profit_yoy_growth"].median()
-
-    logs.append(f"\nRevenue YoY Growth:")
-    logs.append(f"  Average: {avg_rev_yoy:.2f}%")
-    logs.append(f"  Median:  {median_rev_yoy:.2f}%")
-
-    logs.append(f"\nOperating Profit YoY Growth:")
-    logs.append(f"  Average: {avg_op_yoy:.2f}%")
-    logs.append(f"  Median:  {median_op_yoy:.2f}%")
-
-    logs.append(f"\nProfit YoY Growth:")
-    logs.append(f"  Average: {avg_profit_yoy:.2f}%")
-    logs.append(f"  Median:  {median_profit_yoy:.2f}%")
-
-    logs.append("\n" + "=" * 100)
-    logs.append(f"Summary Statistics - QoQ ({current_quarter} vs {previous_quarter_qoq}):")
-    logs.append("=" * 100)
-
-    avg_rev_qoq = merged_df[merged_df["revenue_qoq_growth"].notna()]["revenue_qoq_growth"].mean()
-    avg_profit_qoq = merged_df[merged_df["profit_qoq_growth"].notna()]["profit_qoq_growth"].mean()
-    avg_op_qoq = merged_df[merged_df["operating_profit_qoq_growth"].notna()]["operating_profit_qoq_growth"].mean()
-    median_rev_qoq = merged_df[merged_df["revenue_qoq_growth"].notna()]["revenue_qoq_growth"].median()
-    median_profit_qoq = merged_df[merged_df["profit_qoq_growth"].notna()]["profit_qoq_growth"].median()
-    median_op_qoq = merged_df[merged_df["operating_profit_qoq_growth"].notna()]["operating_profit_qoq_growth"].median()
-
-    logs.append(f"\nRevenue QoQ Growth:")
-    logs.append(f"  Average: {avg_rev_qoq:.2f}%")
-    logs.append(f"  Median:  {median_rev_qoq:.2f}%")
-
-    logs.append(f"\nOperating Profit QoQ Growth:")
-    logs.append(f"  Average: {avg_op_qoq:.2f}%")
-    logs.append(f"  Median:  {median_op_qoq:.2f}%")
-
-    logs.append(f"\nProfit QoQ Growth:")
-    logs.append(f"  Average: {avg_profit_qoq:.2f}%")
-    logs.append(f"  Median:  {median_profit_qoq:.2f}%")
+    logs.append("\nIndex statistics omitted; focus on aggregate index growth metrics.")
 
     logs.append("\n" + "=" * 100)
     logs.append("Index-Level Summary:")
@@ -482,7 +491,7 @@ def generate_analysis(merged_df, summary, index_name, current_quarter, previous_
     logs.append(f"Declared Index Weight Represented: {summary['declared_weight_pct']:.2f}%")
 
     def fmt_pct(value):
-        return f"{value:.2f}%" if value is not None else "N/A"
+        return f"{value:.2f}%" if pd.notna(value) else "N/A"
 
     logs.append(f"\nNormal Revenue YoY Growth (index aggregate): {fmt_pct(summary['normal_revenue_yoy_growth_pct'])}")
     logs.append(f"Weighted Revenue YoY Growth: {fmt_pct(summary['weighted_revenue_yoy_growth_pct'])}")
@@ -596,7 +605,14 @@ def main():
 
         index_constituents = fetch_index_constituents(index_name)
         declared_q4_fy26 = get_declared_current_quarter(df, index_constituents, index_name, current_quarter)
-        merged_df, summary = calculate_growth_metrics(declared_q4_fy26, prev_yoy_data, prev_qoq_data, prev_yoy_suffix, prev_qoq_suffix)
+        merged_df, summary = calculate_growth_metrics(
+            declared_q4_fy26,
+            prev_yoy_data,
+            prev_qoq_data,
+            prev_yoy_suffix,
+            prev_qoq_suffix,
+            len(index_constituents)
+        )
 
         merged_df["index_name"] = index_name
         combined_results.append(merged_df)

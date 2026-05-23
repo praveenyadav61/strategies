@@ -277,16 +277,7 @@ def render_growth_trend(df, selected_indices, basis, period):
 
 @st.cache_data(show_spinner=False)
 def load_earnings_summary_data():
-    summary_candidates = [
-        ROOT_DIR / "data" / "quarterly" / "india_inc_earnings_summary.csv",
-        ROOT_DIR / "earnings" / "india_inc_earnings_summary.csv",
-        Path("data") / "quarterly" / "india_inc_earnings_summary.csv",
-        Path("earnings") / "india_inc_earnings_summary.csv",
-        Path("..") / "data" / "quarterly" / "india_inc_earnings_summary.csv",
-        Path("..") / "earnings" / "india_inc_earnings_summary.csv",
-    ]
-
-    summary_path = first_existing_path(*summary_candidates)
+    summary_path = ROOT_DIR / "data" / "quarterly" / "india_inc_earnings_summary.csv"
     if summary_path is None:
         return pd.DataFrame()
 
