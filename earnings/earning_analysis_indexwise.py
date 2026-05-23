@@ -1,6 +1,7 @@
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+import time
 import requests
 
 # =========================================================
@@ -18,7 +19,9 @@ INDEX_NAMES = [
     "NIFTY MIDCAP 100",
     "NIFTY SMALLCAP 100",
 ]
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = 60
+REQUEST_RETRIES = 3
+REQUEST_BACKOFF_SECONDS = 1.5
 
 # =========================================================
 # FETCH INDEX CONSTITUENTS
@@ -44,51 +47,70 @@ def fetch_index_constituents(index_name):
         f"equity-stockIndices?index={encoded_index}"
     )
 
-    session = requests.Session()
+    last_error = None
 
-    session.get(
-        "https://www.nseindia.com/",
-        headers=headers
-    )
+    for attempt in range(1, REQUEST_RETRIES + 1):
+        session = None
+        try:
+            session = requests.Session()
 
-    response = session.get(
-        url,
-        headers=headers,
-        timeout=REQUEST_TIMEOUT
-    )
+            session.get(
+                "https://www.nseindia.com/",
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
 
-    response.raise_for_status()
+            response = session.get(
+                url,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-    data = response.json()
+            raw_data = []
+            total_ffmc = 0
 
-    raw_data = []
-    total_ffmc = 0
+            for row in data["data"]:
+                ffmc = row.get("ffmc")
+                symbol = row.get("symbol")
 
-    for row in data["data"]:
+                if symbol == index_name:
+                    continue
 
-        ffmc = row.get("ffmc")
-        symbol = row.get("symbol")
+                if ffmc is None:
+                    continue
 
-        # Skip index row itself
-        if symbol == index_name:
-            continue
+                raw_data.append({
+                    "ticker": f"{symbol}.NS",
+                    "ffmc": ffmc
+                })
+                total_ffmc += ffmc
 
-        if ffmc is None:
-            continue
+            constituents = {}
+            if total_ffmc:
+                for row in raw_data:
+                    constituents[row["ticker"]] = row["ffmc"] / total_ffmc
 
-        raw_data.append({
-            "ticker": f"{symbol}.NS",
-            "ffmc": ffmc
-        })
-        total_ffmc += ffmc
+            print(f"[INFO] Fetched {len(constituents)} constituents for {index_name}")
+            return constituents
 
-    constituents = {}
-    if total_ffmc:
-        for row in raw_data:
-            constituents[row["ticker"]] = row["ffmc"] / total_ffmc
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            last_error = exc
+            if attempt == REQUEST_RETRIES:
+                raise
+            print(
+                f"[WARN] NSE fetch attempt {attempt}/{REQUEST_RETRIES} failed for {index_name}: {exc}. Retrying..."
+            )
+            time.sleep(REQUEST_BACKOFF_SECONDS * attempt)
+        finally:
+            if session is not None:
+                session.close()
 
-    print(f"[INFO] Fetched {len(constituents)} constituents for {index_name}")
-    return constituents
+    if last_error is not None:
+        raise last_error
+
+    raise RuntimeError(f"Failed to fetch constituents for {index_name}")
 
 
 def load_earnings_data():
