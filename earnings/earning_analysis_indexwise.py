@@ -19,102 +19,48 @@ INDEX_NAMES = [
     "NIFTY MIDCAP 100",
     "NIFTY SMALLCAP 100",
 ]
-REQUEST_TIMEOUT = 60
-REQUEST_RETRIES = 3
-REQUEST_BACKOFF_SECONDS = 1.5
+WEIGHTAGE_CSV = BASE_DIR / "data" / "static" / "weightage.csv"
 
 # =========================================================
 # FETCH INDEX CONSTITUENTS
 # =========================================================
 
 
+
+def load_index_constituents_from_csv(index_name):
+    """Load index constituent weights from the provided CSV file."""
+    if not WEIGHTAGE_CSV.exists():
+        raise FileNotFoundError(f"Weightage CSV not found: {WEIGHTAGE_CSV}")
+    weight_df = pd.read_csv(WEIGHTAGE_CSV)
+    cached = weight_df[weight_df["index"] == index_name].copy()
+    if cached.empty:
+        raise ValueError(f"No constituents found for index: {index_name}")
+    cached["average"] = pd.to_numeric(cached["average"], errors="coerce")
+    cached = cached.dropna(subset=["average"])
+    cached = cached[cached["average"] > 0]
+    total_weight = cached["average"].sum()
+    if not pd.notna(total_weight) or total_weight <= 0:
+        raise ValueError(f"Invalid total weight for index: {index_name}")
+    constituents = {}
+    for _, row in cached.iterrows():
+        symbol = str(row.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        weight = float(row["average"]) / float(total_weight)
+        if weight <= 0:
+            continue
+        constituents[f"{symbol}.NS"] = weight
+    print(f"[INFO] Loaded {len(constituents)} weights from CSV for {index_name}")
+    return constituents
+
+
 def fetch_index_constituents(index_name):
-    """
-    Fetch index constituents from NSE API
-    """
-    print(f"[INFO] Fetching {index_name} constituents from NSE")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json,text/plain,*/*",
-        "Referer": "https://www.nseindia.com/",
-    }
-
-    encoded_index = index_name.replace(" ", "%20")
-
-    url = (
-        "https://www.nseindia.com/api/"
-        f"equity-stockIndices?index={encoded_index}"
-    )
-
-    last_error = None
-
-    for attempt in range(1, REQUEST_RETRIES + 1):
-        session = None
-        try:
-            session = requests.Session()
-
-            session.get(
-                "https://www.nseindia.com/",
-                headers=headers,
-                timeout=REQUEST_TIMEOUT,
-            )
-
-            response = session.get(
-                url,
-                headers=headers,
-                timeout=REQUEST_TIMEOUT,
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            raw_data = []
-            total_ffmc = 0
-
-            for row in data["data"]:
-                ffmc = row.get("ffmc")
-                symbol = row.get("symbol")
-
-                if symbol == index_name:
-                    continue
-
-                if ffmc is None:
-                    continue
-
-                raw_data.append({
-                    "ticker": f"{symbol}.NS",
-                    "ffmc": ffmc
-                })
-                total_ffmc += ffmc
-
-            constituents = {}
-            if total_ffmc:
-                for row in raw_data:
-                    constituents[row["ticker"]] = row["ffmc"] / total_ffmc
-
-            print(f"[INFO] Fetched {len(constituents)} constituents for {index_name}")
-            return constituents
-
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-            last_error = exc
-            if attempt == REQUEST_RETRIES:
-                raise
-            print(
-                f"[WARN] NSE fetch attempt {attempt}/{REQUEST_RETRIES} failed for {index_name}: {exc}. Retrying..."
-            )
-            time.sleep(REQUEST_BACKOFF_SECONDS * attempt)
-        finally:
-            if session is not None:
-                session.close()
-
-    if last_error is not None:
-        raise last_error
-
-    raise RuntimeError(f"Failed to fetch constituents for {index_name}")
+    """Fetch index constituents from the provided CSV file only."""
+    return load_index_constituents_from_csv(index_name)
 
 
 def load_earnings_data():
-    """Load the aggregated earnings CSV"""
+    """Load the aggregated earnings CSV."""
     print(f"[INFO] Loading earnings data from {AGG_CSV}")
     df = pd.read_csv(AGG_CSV)
     print(f"[INFO] Total rows: {len(df)}")
