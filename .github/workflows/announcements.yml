@@ -34,11 +34,15 @@ jobs:
         run: |
           python announcement.py
 
+      - name: Run Bulk/Block deals Data
+        run: |
+          python bulk_block.py
+
       - name: Commit & push changes
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git pull origin dev
-          git add data/Announcements
+          git add data
           git diff --cached --quiet || git commit -m "Auto update data"
           git push origin dev
