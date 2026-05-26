@@ -4,6 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 from io import StringIO
+import json
 
 # -------------------------
 # CONFIG
@@ -12,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data", "quarterly")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-FULL_FILE = os.path.join(DATA_DIR, "eps_full.csv")
+FULL_FILE = os.path.join(DATA_DIR, "eps_screener_data.csv")
 PROCESSED_FILE = os.path.join(DATA_DIR, "eps_processed.csv")
 
 HEADERS = {
@@ -26,6 +27,16 @@ HEADERS = {
 # -------------------------
 # GET SYMBOLS
 # -------------------------
+CORE_TICKERS_FILE = os.path.join(os.path.dirname(__file__), "thecore_tickers_list.txt")
+
+def load_core_tickers():
+    try:
+        with open(CORE_TICKERS_FILE, "r", encoding="utf-8") as f:
+            return {t.strip().upper() for t in json.load(f)}
+    except Exception as e:
+        print(f"[WARN] Could not load core tickers: {e}")
+        return set()
+
 def get_symbols():
     url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
     try:
@@ -38,12 +49,17 @@ def get_symbols():
         if "SERIES" in df.columns:
             df = df[df["SERIES"] == "EQ"]
 
-        return [s + ".NS" for s in df["SYMBOL"].astype(str)]
+        core_tickers = load_core_tickers()
+
+        return [
+            s + ".NS"
+            for s in df["SYMBOL"].astype(str).str.strip().str.upper()
+            if s not in core_tickers
+        ]
 
     except Exception as e:
         print(f"[ERROR] Fetching symbols failed: {e}")
         return []
-
 # -------------------------
 # GET EPS DATA (WITH RETRY)
 # -------------------------
@@ -66,24 +82,56 @@ def get_eps_data(full_symbol, retries=2):
                 tables = pd.read_html(StringIO(response.text))
                 df = tables[0]
 
+                # Find required rows
+                sales_row = df[df.iloc[:, 0].str.contains('Sales', case=False, na=False)]
+                op_row = df[df.iloc[:, 0].str.contains('Operating Profit', case=False, na=False)]
+                opm_row = df[df.iloc[:, 0].str.contains('OPM %', case=False, na=False)]
+                np_row = df[df.iloc[:, 0].str.contains('Profit after tax', case=False, na=False)]
                 eps_row = df[df.iloc[:, 0].str.contains('EPS in Rs', case=False, na=False)]
-                # print("eps row for ",full_symbol,eps_row)
+
                 if eps_row.empty:
                     return None
 
-                eps = eps_row.iloc[0, 1:]
-
-                # FIXED DATE PARSING
                 dates = pd.to_datetime(df.columns[1:], format="%b %Y", errors="coerce")
                 dates = dates + pd.offsets.MonthEnd(0)
 
                 result = pd.DataFrame({
                     "symbol": clean_slug,
                     "date": dates,
-                    "eps": pd.to_numeric(eps.values, errors="coerce")
+                    "revenue": pd.to_numeric(
+                        sales_row.iloc[0, 1:].values if not sales_row.empty else None,
+                        errors="coerce"
+                    ),
+                    "operating_profit": pd.to_numeric(
+                        op_row.iloc[0, 1:].values if not op_row.empty else None,
+                        errors="coerce"
+                    ),
+                    "opm_percent": (
+                        opm_row.iloc[0, 1:].astype(str)
+                        .str.replace("%", "", regex=False)
+                        if not opm_row.empty else None
+                    ),
+                    "net_profit": pd.to_numeric(
+                        np_row.iloc[0, 1:].values if not np_row.empty else None,
+                        errors="coerce"
+                    ),
+                    "eps": pd.to_numeric(
+                        eps_row.iloc[0, 1:].values,
+                        errors="coerce"
+                    )
                 })
 
-                result = result.dropna(subset=["date", "eps"])
+                result["opm_percent"] = pd.to_numeric(
+                    result["opm_percent"],
+                    errors="coerce"
+                )
+
+                result = result.dropna(subset=["date"])
+
+                # Keep data only till Q4 FY26
+                cutoff_date = pd.Timestamp("2026-03-31")
+                result = result[result["date"] <= cutoff_date]
+
                 return result
 
             except Exception:
@@ -140,7 +188,7 @@ def main():
 
     all_data = []
 
-    for sym in symbols[0:50]:
+    for sym in symbols:
         print(f"[INFO] Processing {sym}")
 
         df = get_eps_data(sym)
@@ -157,9 +205,9 @@ def main():
     new_df = pd.concat(all_data, ignore_index=True)
 
     full_df = update_full_data(new_df)
-    processed_df = create_processed_data(full_df)
+    # processed_df = create_processed_data(full_df)
 
-    processed_df.to_csv(PROCESSED_FILE, index=False)
+    # processed_df.to_csv(PROCESSED_FILE, index=False)
 
     print("[SUCCESS] EPS data updated")
 

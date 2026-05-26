@@ -17,6 +17,7 @@ from modular_base_scanner import CupScanner
 from chart_plot import plot_cup_formation, plot_trend_follower_chart
 from trend_follower.final_trend_follower import EMAScanner
 from audio import build_transcript_pdf, load_saved_records, process_audio_request
+from Streamlit.earnings_summary import render_earnings_summary_page
 
 
 def normalize_symbol_for_deals(symbol):
@@ -266,7 +267,7 @@ announcements_df = load_announcements_data()
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Choose a page",
-    ["Home", "Base Formation", "Announcements", "Bulk_Block_Deal", "Trend_Follower", "Audio Transcript"],
+    ["Home", "Base Formation", "Announcements", "Earnings Summary", "Bulk_Block_Deal", "Trend_Follower", "Audio Transcript"],
 )
 m_cap =st.sidebar.number_input("Market Cap Filter (in Crores)", min_value=10, value=1000, step=1000000000)
 if page == "Home":
@@ -480,6 +481,9 @@ elif page == "Announcements":
                     )
                 },
             )
+
+elif page == "Earnings Summary":
+    render_earnings_summary_page()
 
 elif page == "Audio Transcript":
     st.title("Audio Transcript")
