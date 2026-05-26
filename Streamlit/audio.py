@@ -18,7 +18,7 @@ import requests
 LOGGER = logging.getLogger(__name__)
 
 DATA_DIR = Path("data/transcripter")
-ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".mp4"}
+ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".mp4",".mpeg"}
 ALLOWED_CONTENT_TYPES = {
     "audio/mpeg",
     "audio/mp3",

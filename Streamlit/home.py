@@ -393,24 +393,25 @@ elif page == "Base Formation":
 
                     if not announcements_df.empty:
                         st.write(f"Announcements for {selected_deal_symbol}")
-                        announcement_info = announcements_df[
-                            announcements_df['symbol'] == selected_deal_symbol
-                        ].copy()
-                        if announcement_info.empty:
-                            st.info(f"No announcements found for {selected_deal_symbol}.")
-                        else:
-                            announcement_info = format_announcements_table(announcement_info)
-                            st.dataframe(
-                                announcement_info,
-                                use_container_width=True,
-                                hide_index=True,
-                                column_config={
-                                    'attachment_url': st.column_config.LinkColumn(
-                                        'Attachment URL',
-                                        display_text='Open attachment',
-                                    )
-                                },
-                            )
+                        with st.expander(f"📋 View Announcements for {selected_deal_symbol}"):
+                            announcement_info = announcements_df[
+                                announcements_df['symbol'] == selected_deal_symbol
+                            ].copy()
+                            if announcement_info.empty:
+                                st.info(f"No announcements found for {selected_deal_symbol}.")
+                            else:
+                                announcement_info = format_announcements_table(announcement_info)
+                                st.dataframe(
+                                    announcement_info,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        'attachment_url': st.column_config.LinkColumn(
+                                            'Attachment URL',
+                                            display_text='Open attachment',
+                                        )
+                                    },
+                                )
                     else:
                         st.info("Announcement data file was not found.")
 
