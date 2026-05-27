@@ -75,7 +75,7 @@ Weighted Operating Profit QoQ Growth: 0.00%
 Normal Profit QoQ Growth (index aggregate): 18.78%
 Weighted Profit QoQ Growth: 7.59%
 
-Analysis generated at: 2026-05-26T16:53:42.063073
+Analysis generated at: 2026-05-27T16:51:29.504243
 ================================================================================
 
 ================================================================================
@@ -190,15 +190,15 @@ Weighted Operating Profit QoQ Growth: 16.46%
 Normal Profit QoQ Growth (index aggregate): 31.84%
 Weighted Profit QoQ Growth: 31.70%
 
-Analysis generated at: 2026-05-26T16:53:42.096787
+Analysis generated at: 2026-05-27T16:51:29.536600
 ================================================================================
 
 ================================================================================
 Q4 FY26 Earnings Analysis - NIFTY SMALLCAP 100
 ================================================================================
 
-Total Declared Companies (Q4 FY26): 74
-Companies with Q4 FY25 comparison: 71
+Total Declared Companies (Q4 FY26): 75
+Companies with Q4 FY25 comparison: 72
 
 
 TICKER             CUR_REV     PY_REV   YOY_REV%    QOQ_REV   QOQ_REV%     CUR_OP      PY_OP    YOY_OP%     QOQ_OP    QOQ_OP%   CUR_PROFIT    PY_PROFIT YOY_PROFIT%   QOQ_PROFIT QOQ_PROFIT%
@@ -227,6 +227,7 @@ CREDITACC.NS    15970000000 14070000000     13.50% 14900000000      7.18%       
 CROMPTON.NS     22830000000 20610000000     10.77% 18980000000     20.28% 2710000000 2640000000      2.65% 1950000000     38.97%  -5310000000   1720000000    -408.72%   1010000000    -625.74%
 DATAPATTNS.NS   3448500000        nan        N/A        nan        N/A 1879600000        nan        N/A        nan        N/A   1383800000          nan         N/A          nan         N/A
 DELHIVERY.NS    28500000000 21920000000     30.02% 28050000000      1.60% 2140000000 1190000000     79.83% 2090000000      2.39%    720000000    730000000      -1.37%    400000000      80.00%
+FIRSTCRY.NS     21626680000 19300000000     12.06% 24240000000    -10.78%  201780000  160000000     26.11%  970000000    -79.20%    316410000  -1120000000     128.25%   -390000000     181.13%
 FORCEMOT.NS     25500000000 23560000000      8.23% 21290000000     19.77% 4140000000 3290000000     25.84% 3740000000     10.70%   2790000000   4350000000     -35.86%   4060000000     -31.28%
 FSL.NS          25830000000 21610000000     19.53% 24430000000      5.73% 4300000000 3330000000     29.13% 4030000000      6.70%   2050000000   1610000000      27.33%   1200000000      70.83%
 GESHIP.NS       15110000000 12230000000     23.55% 14540000000      3.92% 9410000000 5020000000     87.45% 8360000000     12.56%  10440000000   3630000000     187.60%   8130000000      28.41%
@@ -283,21 +284,21 @@ Index statistics omitted; focus on aggregate index growth metrics.
 ====================================================================================================
 Index-Level Summary:
 ====================================================================================================
-Declared Index Weight Represented: 77.95%
+Declared Index Weight Represented: 78.45%
 
 Normal Revenue YoY Growth (index aggregate): 12.44%
-Weighted Revenue YoY Growth: 15.94%
+Weighted Revenue YoY Growth: 15.92%
 Normal Operating Profit YoY Growth (index aggregate): 23.69%
 Weighted Operating Profit YoY Growth: 21.75%
 Normal Profit YoY Growth (index aggregate): 17.98%
 Weighted Profit YoY Growth: 27.19%
 
-Normal Revenue QoQ Growth (index aggregate): 5.93%
-Weighted Revenue QoQ Growth: 7.35%
-Normal Operating Profit QoQ Growth (index aggregate): -3.97%
-Weighted Operating Profit QoQ Growth: -0.27%
+Normal Revenue QoQ Growth (index aggregate): 5.73%
+Weighted Revenue QoQ Growth: 7.23%
+Normal Operating Profit QoQ Growth (index aggregate): -4.31%
+Weighted Operating Profit QoQ Growth: -0.43%
 Normal Profit QoQ Growth (index aggregate): 7.06%
 Weighted Profit QoQ Growth: 16.19%
 
-Analysis generated at: 2026-05-26T16:53:42.129907
+Analysis generated at: 2026-05-27T16:51:29.568257
 ================================================================================
