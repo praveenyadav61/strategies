@@ -551,7 +551,7 @@ def save_summary(summary_df):
         combined = pd.concat([existing_df, summary_df], ignore_index=True)
         combined["quarter_sort_key"] = combined["quarter_label"].apply(quarter_sort_key)
         combined = combined.sort_values(by=["index_name", "quarter_sort_key"], ascending=[True, False])
-        combined = combined.drop_duplicates(subset=["index_name", "quarter_label"], keep="first")
+        combined = combined.drop_duplicates(subset=["index_name", "quarter_label"], keep="last")
         combined = combined.drop(columns=["quarter_sort_key"])
         summary_df = combined
     summary_df.to_csv(output_csv, index=False)

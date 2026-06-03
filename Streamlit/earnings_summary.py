@@ -275,10 +275,9 @@ def render_growth_trend(df, selected_indices, basis, period):
     st.plotly_chart(fig, use_container_width=True)
 
 
-@st.cache_data(show_spinner=False)
-def load_earnings_summary_data():
-    summary_path = ROOT_DIR / "data" / "quarterly" / "india_inc_earnings_summary.csv"
-    if summary_path is None:
+@st.cache_data(show_spinner=True)
+def load_earnings_summary_data(summary_path, summary_mtime):
+    if not summary_path.exists():
         return pd.DataFrame()
 
     summary_df = pd.read_csv(summary_path)
@@ -295,7 +294,9 @@ def render_earnings_summary_page():
     st.title("India Inc Earnings Summary")
     st.caption("Index-wise earnings growth dashboard across revenue, operating profit, and net profit.")
 
-    earnings_df = load_earnings_summary_data()
+    summary_path = ROOT_DIR / "data" / "quarterly" / "india_inc_earnings_summary.csv"
+    summary_mtime = summary_path.stat().st_mtime if summary_path.exists() else None
+    earnings_df = load_earnings_summary_data(summary_path, summary_mtime)
     if earnings_df.empty:
         st.warning("India Inc earnings summary file was not found.")
         return
