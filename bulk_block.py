@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 from datetime import datetime
+from datetime import timedelta
 import os
 
 # -----------------------------
@@ -12,7 +13,8 @@ HEADERS = {
 
 BASE_URL = "https://www.nseindia.com"
 HISTORICAL_DEALS_API = f"{BASE_URL}/api/historicalOR/bulk-block-short-deals"
-LOOKBACK_MONTHS = 6
+LOOKBACK_MONTHS = 24
+MAX_API_RANGE_DAYS = 365
 
 # The relative path "../data/deals_data/" can be confusing because it depends on
 # where you run the script from. A more robust approach is to build an absolute
@@ -181,7 +183,38 @@ def fetch_historical_deals(session, option_type, from_date, to_date):
         return pd.DataFrame()
 
 
-def fetch_last_six_months(as_of_date=None):
+def split_date_range(from_date, to_date, max_days=MAX_API_RANGE_DAYS):
+    """
+    NSE historical deals endpoint fails for ranges above ~365 days, so fetch
+    long windows in smaller inclusive chunks.
+    """
+    ranges = []
+    current_start = from_date
+
+    while current_start <= to_date:
+        current_end = min(current_start + timedelta(days=max_days - 1), to_date)
+        ranges.append((current_start, current_end))
+        current_start = current_end + timedelta(days=1)
+
+    return ranges
+
+
+def fetch_historical_deals_range(session, option_type, from_date, to_date):
+    frames = []
+
+    for chunk_start, chunk_end in split_date_range(from_date, to_date):
+        print(f"Fetching {option_type} chunk: {chunk_start} to {chunk_end}")
+        chunk_df = fetch_historical_deals(session, option_type, chunk_start, chunk_end)
+        if not chunk_df.empty:
+            frames.append(chunk_df)
+
+    if not frames:
+        return pd.DataFrame()
+
+    return pd.concat(frames, ignore_index=True)
+
+
+def fetch_last_two_years(as_of_date=None):
     session = create_session()
     as_of_date = pd.to_datetime(as_of_date or datetime.now().date()).date()
     from_date = (pd.Timestamp(as_of_date) - pd.DateOffset(months=LOOKBACK_MONTHS)).date()
@@ -191,8 +224,8 @@ def fetch_last_six_months(as_of_date=None):
         f"from {from_date} to {as_of_date}"
     )
 
-    bulk_df = fetch_historical_deals(session, "bulk_deals", from_date, as_of_date)
-    block_df = fetch_historical_deals(session, "block_deals", from_date, as_of_date)
+    bulk_df = fetch_historical_deals_range(session, "bulk_deals", from_date, as_of_date)
+    block_df = fetch_historical_deals_range(session, "block_deals", from_date, as_of_date)
 
     if not bulk_df.empty:
         bulk_df = normalize_deals(bulk_df, fetch_date=as_of_date)
@@ -239,8 +272,8 @@ def append_to_parquet(df, name):
 def run_daily_pipeline(fetch_date_str=None):
     fetch_date = pd.to_datetime(fetch_date_str or datetime.now().date()).date()
 
-    print(f"Fetching latest 6 months of NSE bulk/block deals as of {fetch_date}")
-    bulk_df, block_df = fetch_last_six_months(fetch_date)
+    print(f"Fetching latest 2 years of NSE bulk/block deals as of {fetch_date}")
+    bulk_df, block_df = fetch_last_two_years(fetch_date)
 
     bulk_df = append_to_parquet(bulk_df, "bulk_deals")
 

@@ -18,6 +18,7 @@ from chart_plot import plot_cup_formation, plot_trend_follower_chart
 from trend_follower.final_trend_follower import EMAScanner
 from audio import build_transcript_pdf, load_saved_records, process_audio_request
 from Streamlit.earnings_summary import render_earnings_summary_page
+from Streamlit.bulk_block_analysis import render_bulk_block_page
 
 
 def normalize_symbol_for_deals(symbol):
@@ -579,54 +580,7 @@ elif page == "Audio Transcript":
             st.warning(f"Could not load saved records: {e}")
 
 elif page == "Bulk_Block_Deal":
-    st.title("Bulk Block Deal Scanner")
-    st.info("This scanner identifies stocks with significant bulk block deals.")
-    default_start_date = date(2026, 1, 1)
-    default_end_date = date.today()
-    bulk_df = bulk_deals_df.copy()
-    block_df = block_deals_df.copy()
-    filter_col1, filter_col2, filter_col3 = st.columns(3)
-    with filter_col1:
-        start_date = st.date_input("Start Date", value=default_start_date, key="bulk_block_start_date")
-    with filter_col2:
-        end_date = st.date_input("End Date", value=default_end_date, key="bulk_block_end_date")
-    with filter_col3:
-        selected_symbol = st.selectbox(
-            "Select Symbol",
-            options=get_symbol_options(bulk_df, block_df, symbol_col="Symbol"),
-            key="bulk_block_symbol",
-        )
-
-    bulk_df = filter_by_date_and_symbol(
-        bulk_df,
-        date_col="Date",
-        symbol_col="Symbol",
-        start_date=start_date,
-        end_date=end_date,
-        selected_symbol=selected_symbol,
-    )
-    block_df = filter_by_date_and_symbol(
-        block_df,
-        date_col="Date",
-        symbol_col="Symbol",
-        start_date=start_date,
-        end_date=end_date,
-        selected_symbol=selected_symbol,
-    )
-
-    st.caption(f"Bulk deals: {len(bulk_df)} | Block deals: {len(block_df)}")
-
-    st.subheader("Bulk Deals")
-    if bulk_df.empty:
-        st.info("No bulk deals found for the selected filters.")
-    else:
-        st.dataframe(bulk_df.sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
-
-    st.subheader("Block Deals")
-    if block_df.empty:
-        st.info("No block deals found for the selected filters.")
-    else:
-        st.dataframe(block_df.sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
+    render_bulk_block_page(bulk_deals_df, block_deals_df)
 
 elif page == "Trend_Follower":
     st.title("Trend Follower Scanner")
