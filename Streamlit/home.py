@@ -37,7 +37,7 @@ def first_existing_path(*candidates):
     return None
 
 
-@st.cache_data(show_spinner=False)
+# @st.cache_data(show_spinner=False)
 def load_static_data():
     static_path = first_existing_path(
         ROOT_DIR / "data" / "static" / "static_data.parquet",
@@ -53,7 +53,7 @@ def load_static_data():
     return static_df
 
 
-@st.cache_data(show_spinner=False)
+# @st.cache_data(show_spinner=False)
 def load_deals_data():
     bulk_path = first_existing_path(
         ROOT_DIR / "data" / "deals_data" / "bulk_deals.parquet",
@@ -88,7 +88,7 @@ def load_deals_data():
     return bulk_df, block_df
 
 
-@st.cache_data(show_spinner=False)
+# @st.cache_data(show_spinner=False)
 def load_announcements_data():
     announcement_path = first_existing_path(
         ROOT_DIR / "data" / "Announcements" / "announcements.parquet",
