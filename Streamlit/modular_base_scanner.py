@@ -14,9 +14,9 @@ if PROJECT_ROOT not in sys.path:
 from data_layer.data_engine import DataEngine
 
 # ---------------- CONFIG ----------------
-data_path = '../data/daily/'
+data_path = '../data/test/'
 if not os.path.exists(data_path):
-    data_path = 'data/daily/'
+    data_path = 'data/test/'
 
 ATH_THRESHOLD = 0.8
 DEFAULT_PARAMS = {
@@ -177,12 +177,14 @@ def check_cup_conditions(df, params, symbol, stats, logger, ath):
         bottom_price = after_peak.loc[bottom_idx, 'Low']
         
          # ATH filter
-        if peak_price < ath * ATH_THRESHOLD:
-            return None
+        # print(f"{symbol} - Peak: {peak_price:.2f}, ATH: {ath:.2f}")
+        # if peak_price < ath * ATH_THRESHOLD:
+        #     return None
         stats.ath_filtered.append(symbol)
 
         # Depth
         depth = (peak_price - bottom_price) / peak_price
+        # print(f"{symbol} - Depth: {depth:.2%}, Peak: {peak_price:.2f}, Bottom: {bottom_price:.2f}")
         if not (params['MIN_DEPTH'] <= depth <= params['MAX_DEPTH']):
             return None
         stats.min_depth.append(symbol)
@@ -321,9 +323,9 @@ if __name__ == "__main__":
 
     df = scanner.run_scan()
     
-    print("\n===== RESULTS =====")
-    print("Total Found:", len(df))
-    print(df.head(20))
+    # print("\n===== RESULTS =====")
+    # print("Total Found:", len(df))
+    # print(df.head(20))
 
     # print("\n===== STATS =====")
     # print("DMA filtered:", len(scanner.stats.dma_filtered))
