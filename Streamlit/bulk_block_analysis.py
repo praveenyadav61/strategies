@@ -12,6 +12,64 @@ LOOKBACK_OPTIONS = {
     "1Y": pd.DateOffset(years=1),
     "2Y": pd.DateOffset(years=2),
 }
+FUND_HOUSE_LOOKBACK_LABEL = "6M"
+BULK_HOUSE_LOOKBACK_LABEL = "1Y"
+
+FUND_HOUSE_REGEX_PATTERNS = [
+    ("BARODA BNP PARIBAS", [r"BARODA\s+BNP\s+PARIBAS"]),
+    ("ADITYA BIRLA SUN LIFE", [r"ADITYA\s+BIRLA\s+SUN\s+LIFE", r"ADITYA\s+BIRLA\s+SUNLIFE"]),
+    ("ICICI PRUDENTIAL", [r"ICICI\s+PRUDENTIAL"]),
+    ("KOTAK MAHINDRA", [r"KOTAK\s+MAHINDRA"]),
+    ("MOTILAL OSWAL", [r"MOTILAL\s+OSWAL"]),
+    ("NIPPON INDIA", [r"NIPPON\s+INDIA"]),
+    ("MIRAE ASSET", [r"MIRAE\s+ASSET"]),
+    ("FRANKLIN TEMPLETON", [r"FRANKLIN\s+TEMPLETON"]),
+    ("MAHINDRA MANULIFE", [r"MAHINDRA\s+MANULIFE"]),
+    ("WHITEOAK CAPITAL", [r"WHITEOAK\s+CAPITAL"]),
+    ("BANK OF INDIA", [r"BANK\s+OF\s+INDIA"]),
+    ("CANARA ROBECO", [r"CANARA\s+ROBECO"]),
+    ("BNP PARIBAS", [r"\bBNP\s+PARIBAS\b"]),
+    ("BANK OF AMERICA", [r"BANK\s+OF\s+AMERICA", r"\bBOFA\b"]),
+    ("MERRILL LYNCH", [r"MERRILL\s+LYNCH"]),
+    ("GOLDMAN SACHS", [r"GOLDMAN"]),
+    ("MORGAN STANLEY", [r"MORGAN\s+STANLEY"]),
+    ("SOCIETE GENERALE", [r"SOCIETE\s+GENERALE"]),
+    ("J.P. MORGAN", [r"J\s*P\s*MORGAN", r"JP\s*MORGAN"]),
+    ("GOVERNMENT OF SINGAPORE", [r"GOVERNMENT\s+OF\s+SINGAPORE"]),
+    ("MONETARY AUTHORITY OF SINGAPORE", [r"MONETARY\s+AUTHORITY\s+OF\s+SINGAPORE"]),
+    ("NORGES BANK", [r"NORGES\s+BANK"]),
+    ("T. ROWE PRICE", [r"T\s*ROWE\s*PRICE"]),
+    ("APMS INVESTMENT FUND", [r"APMS\s+INVESTMENT\s+FUND"]),
+    ("LIGHTHOUSE FUNDS", [r"LIGHTHOUSE\s+FUNDS"]),
+    ("STEADVIEW CAPITAL", [r"STEADVIEW\s+CAPITAL"]),
+    ("ELARA CAPITAL", [r"ELARA\s+CAPITAL"]),
+    ("NALANDA CAPITAL", [r"NALANDA\s+CAPITAL"]),
+    ("AMANSA CAPITAL", [r"AMANSA\s+CAPITAL"]),
+    ("ARES MANAGEMENT", [r"ARES\s+MANAGEMENT"]),
+    ("FIDELITY", [r"FIDELITY"]),
+    ("VANGUARD", [r"VANGUARD"]),
+    ("NOMURA", [r"NOMURA"]),
+    ("UBS", [r"\bUBS\b"]),
+    ("CITIGROUP", [r"CITIGROUP", r"\bCITI\b"]),
+    ("INVESCO", [r"\bINVESCO\b"]),
+    ("MINERVA", [r"MINERVA"]),
+    ("HDFC", [r"\bHDFC\b"]),
+    ("SBI", [r"\bSBI\b"]),
+    ("QUANT", [r"\bQUANT\b"]),
+    ("DSP", [r"\bDSP\b"]),
+    ("BANDHAN", [r"\bBANDHAN\b"]),
+    ("AXIS", [r"\bAXIS\b"]),
+    ("TATA", [r"\bTATA\b"]),
+    ("PPFAS", [r"\bPPFAS\b", r"PARAG\s+PARIKH"]),
+    ("HSBC", [r"\bHSBC\b"]),
+    ("SUNDARAM", [r"\bSUNDARAM\b"]),
+    ("UTI", [r"\bUTI\b"]),
+    ("EDELWEISS", [r"\bEDELWEISS\b"]),
+    ("DESERET", [r"\bDESERET\b"]),
+    ("BAJAJ FINSERV", [r"BAJAJ\s+FINSERV"]),
+    ("RELIANCE", [r"\bRELIANCE\b"]),
+    ("LIC", [r"\bLIC\b"]),
+]
 
 
 def normalize_client_name(series: pd.Series) -> pd.Series:
@@ -27,6 +85,18 @@ def normalize_client_name(series: pd.Series) -> pd.Series:
         .str.strip()
         .str.replace(r"\s+", " ", regex=True)
     )
+
+
+def extract_fund_house_name(client_name: str) -> str | None:
+    """
+    Map raw client names to curated canonical fund / investment house names.
+    """
+    normalized = normalize_client_name(pd.Series([client_name])).iloc[0]
+    for canonical_name, patterns in FUND_HOUSE_REGEX_PATTERNS:
+        for pattern in patterns:
+            if pd.Series([normalized]).str.contains(pattern, regex=True, na=False).iloc[0]:
+                return canonical_name
+    return None
 
 
 def prepare_bulk_fund_data(df: pd.DataFrame) -> pd.DataFrame:
@@ -192,7 +262,144 @@ def get_symbol_options(*frames: pd.DataFrame) -> list[str]:
     return ["All"] + sorted(symbol for symbol in symbols if symbol)
 
 
-def render_bulk_block_page(bulk_deals_df: pd.DataFrame, block_deals_df: pd.DataFrame) -> None:
+def apply_market_cap_filter(df: pd.DataFrame, static_df: pd.DataFrame, min_market_cap_cr: float) -> pd.DataFrame:
+    if df.empty or static_df.empty or "Symbol" not in df.columns or "symbol" not in static_df.columns:
+        return df
+
+    merge_df = df.copy()
+    merge_df["Merge Symbol"] = merge_df["Symbol"].astype(str).str.strip().str.upper()
+
+    static_merge = static_df.copy()
+    static_merge["Merge Symbol"] = (
+        static_merge["symbol"]
+        .astype(str)
+        .str.replace(".NS", "", regex=False)
+        .str.strip()
+        .str.upper()
+    )
+
+    merged = merge_df.merge(static_merge, on="Merge Symbol", how="left")
+    if "marketCap" in merged.columns:
+        merged["Market Cap (Cr)"] = (merged["marketCap"] / 1_00_00_000).round(0)
+        merged = merged[merged["Market Cap (Cr)"] >= min_market_cap_cr]
+
+    return merged
+
+
+def attach_fund_house(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "Client Name" not in df.columns:
+        return pd.DataFrame()
+
+    enriched = df.copy()
+    enriched["Fund House"] = enriched["Client Name"].apply(extract_fund_house_name)
+    enriched = enriched[enriched["Fund House"].notna()].copy()
+    return enriched
+
+
+def format_ticker_list(group: pd.DataFrame, date_col: str) -> str:
+    ordered = group.sort_values(by=date_col, ascending=False).drop_duplicates(subset=["Symbol"])
+    tickers = ordered["Symbol"].astype(str).tolist()
+    return "[" + ", ".join(tickers) + "]"
+
+
+def format_recent_ticker_list(group: pd.DataFrame, date_col: str, recent_days: int = 7) -> str:
+    latest_date = group[date_col].max()
+    if pd.isna(latest_date):
+        return "[]"
+
+    recent_cutoff = latest_date - pd.Timedelta(days=recent_days - 1)
+    recent_group = group[group[date_col] >= recent_cutoff].copy()
+    if recent_group.empty:
+        return "[]"
+
+    ordered = recent_group.sort_values(by=date_col, ascending=False).drop_duplicates(subset=["Symbol"])
+    tickers = ordered["Symbol"].astype(str).tolist()
+    return "[" + ", ".join(tickers) + "]"
+
+
+def summarize_by_fund_house(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=["Fund House", "Latest Buy Date", "Stock Count", "Tickers", "Recent 7D Stocks"])
+
+    enriched = attach_fund_house(df)
+    if enriched.empty:
+        return pd.DataFrame(columns=["Fund House", "Latest Buy Date", "Stock Count", "Tickers", "Recent 7D Stocks"])
+
+    records = []
+    for fund_house, group in enriched.groupby("Fund House", sort=False):
+        records.append(
+            {
+                "Fund House": fund_house,
+                "Latest Buy Date": group[date_col].max(),
+                "Stock Count": group["Symbol"].nunique(),
+                "Tickers": format_ticker_list(group, date_col),
+                "Recent 7D Stocks": format_recent_ticker_list(group, date_col),
+            }
+        )
+
+    return pd.DataFrame(records).sort_values(
+        ["Latest Buy Date", "Stock Count", "Fund House"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+
+
+def format_fund_house_list(group: pd.DataFrame, date_col: str) -> str:
+    ordered = group.sort_values(by=date_col, ascending=False).drop_duplicates(subset=["Fund House"])
+    houses = ordered["Fund House"].astype(str).tolist()
+    return "[" + ", ".join(houses) + "]"
+
+
+def format_recent_fund_house_list(group: pd.DataFrame, date_col: str, recent_days: int = 7) -> str:
+    latest_date = group[date_col].max()
+    if pd.isna(latest_date):
+        return "[]"
+
+    recent_cutoff = latest_date - pd.Timedelta(days=recent_days - 1)
+    recent_group = group[group[date_col] >= recent_cutoff].copy()
+    if recent_group.empty:
+        return "[]"
+
+    ordered = recent_group.sort_values(by=date_col, ascending=False).drop_duplicates(subset=["Fund House"])
+    houses = ordered["Fund House"].astype(str).tolist()
+    return "[" + ", ".join(houses) + "]"
+
+
+def summarize_by_ticker(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
+    """
+    Reverse of summarize_by_fund_house:
+    for each ticker, show which fund houses bought it and the latest buy date.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["Symbol", "Latest Buy Date", "Fund House Count", "Fund Houses", "Recent 7D Fund Houses"])
+
+    enriched = attach_fund_house(df)
+    if enriched.empty:
+        return pd.DataFrame(columns=["Symbol", "Latest Buy Date", "Fund House Count", "Fund Houses", "Recent 7D Fund Houses"])
+
+    records = []
+    for symbol, group in enriched.groupby("Symbol", sort=False):
+        records.append(
+            {
+                "Symbol": symbol,
+                "Latest Buy Date": group[date_col].max(),
+                "Fund House Count": group["Fund House"].nunique(),
+                "Fund Houses": format_fund_house_list(group, date_col),
+                "Recent 7D Fund Houses": format_recent_fund_house_list(group, date_col),
+            }
+        )
+
+    return pd.DataFrame(records).sort_values(
+        ["Latest Buy Date", "Fund House Count", "Symbol"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+
+
+def render_bulk_block_page(
+    bulk_deals_df: pd.DataFrame,
+    block_deals_df: pd.DataFrame,
+    static_df: pd.DataFrame,
+    min_market_cap_cr: float,
+) -> None:
     st.title("Bulk Block Deal Scanner")
     st.info("Track raw bulk/block deals and analyze fresh or repeated bulk-buy activity by funds/clients.")
 
@@ -243,49 +450,120 @@ def render_bulk_block_page(bulk_deals_df: pd.DataFrame, block_deals_df: pd.DataF
             )
 
     with tab_activity:
-        control_col1, control_col2, control_col3 = st.columns(3)
-        with control_col1:
-            analysis_mode = st.radio(
-                "Analysis",
-                options=["Fresh Buy", "Repeated Buy"],
-                horizontal=True,
-                key="bulk_fund_analysis_mode",
-            )
-        with control_col2:
-            lookback_label = st.selectbox(
-                "Lookback Window",
-                options=list(LOOKBACK_OPTIONS.keys()),
-                index=1,
-                key="bulk_fund_lookback",
-            )
-        with control_col3:
-            min_buy_count = st.number_input(
-                "Min Buy Count",
-                min_value=2,
-                value=3,
-                step=1,
-                key="bulk_repeated_min_count",
-            )
+        stock_view_tab, house_view_tab = st.tabs(["Stock View", "Fund House View"])
 
-        if analysis_mode == "Fresh Buy":
-            fresh_buy_df = get_fresh_buy_table(bulk_df, lookback_label, date.today())
-            st.caption(f"Showing {len(fresh_buy_df)} fresh-buy rows within {lookback_label}, based on first buys across stored history.")
-            if fresh_buy_df.empty:
-                st.info("No fresh buys found for the selected window.")
+        with stock_view_tab:
+            control_col1, control_col2, control_col3 = st.columns(3)
+            with control_col1:
+                analysis_mode = st.radio(
+                    "Analysis",
+                    options=["Fresh Buy", "Repeated Buy"],
+                    horizontal=True,
+                    key="bulk_fund_analysis_mode",
+                )
+            with control_col2:
+                lookback_label = st.selectbox(
+                    "Lookback Window",
+                    options=list(LOOKBACK_OPTIONS.keys()),
+                    index=1,
+                    key="bulk_fund_lookback",
+                )
+            with control_col3:
+                min_buy_count = st.number_input(
+                    "Min Buy Count",
+                    min_value=2,
+                    value=3,
+                    step=1,
+                    key="bulk_repeated_min_count",
+                )
+
+            if analysis_mode == "Fresh Buy":
+                fresh_buy_df = get_fresh_buy_table(bulk_df, lookback_label, date.today())
+                fresh_buy_df = apply_market_cap_filter(fresh_buy_df, static_df, min_market_cap_cr)
+                st.caption(f"Showing {len(fresh_buy_df)} fresh-buy rows within {lookback_label}, based on first buys across stored history.")
+                if fresh_buy_df.empty:
+                    st.info("No fresh buys found for the selected window.")
+                else:
+                    st.dataframe(fresh_buy_df, use_container_width=True, hide_index=True)
+        
             else:
-                st.dataframe(fresh_buy_df, use_container_width=True, hide_index=True)
-        else:
-            repeated_buy_df = get_repeated_buy_table(
-                bulk_df,
-                lookback_label,
-                date.today(),
-                min_buy_count,
-            )
-            st.caption(
-                f"Showing {len(repeated_buy_df)} repeated-buy rows in {lookback_label} "
-                f"with at least {min_buy_count} distinct buy dates."
-            )
-            if repeated_buy_df.empty:
-                st.info("No repeated buys found for the selected filters.")
+                repeated_buy_df = get_repeated_buy_table(
+                    bulk_df,
+                    lookback_label,
+                    date.today(),
+                    min_buy_count,
+                )
+                repeated_buy_df = apply_market_cap_filter(repeated_buy_df, static_df, min_market_cap_cr)
+                st.caption(
+                    f"Showing {len(repeated_buy_df)} repeated-buy rows in {lookback_label} "
+                    f"with at least {min_buy_count} distinct buy dates."
+                )
+                if repeated_buy_df.empty:
+                    st.info("No repeated buys found for the selected filters.")
+                else:
+                    st.dataframe(repeated_buy_df, use_container_width=True, hide_index=True)
+
+        with house_view_tab:
+            house_col1, house_col2 = st.columns(2)
+            with house_col1:
+                house_analysis_mode = st.radio(
+                    "House Analysis",
+                    options=["Fresh Buy", "Repeated Buy"],
+                    horizontal=True,
+                    key="bulk_house_analysis_mode",
+                )
+            with house_col2:
+                house_min_buy_count = st.number_input(
+                    "House Min Buy Count",
+                    min_value=2,
+                    value=3,
+                    step=1,
+                    key="bulk_house_min_count",
+                )
+
+            
+
+            if house_analysis_mode == "Fresh Buy":
+                house_base_df = get_fresh_buy_table(bulk_df, FUND_HOUSE_LOOKBACK_LABEL, date.today())
+                # st.write(f"Identified {len(house_base_df)} fresh buy rows within {FUND_HOUSE_LOOKBACK_LABEL} for fund-house analysis, based on first buys across stored history.")
+                # house_base_df = apply_market_cap_filter(house_base_df, static_df, min_market_cap_cr)
+                fund_house_df = summarize_by_fund_house(house_base_df, "Date")
+                if fund_house_df.empty:
+                    st.info("No fund-house fresh buys found for the current 1Y view.")
+                else:
+                    st.caption("Fund-house view uses a fixed 6M lookback and is sorted by latest buy date.")
+                    st.dataframe(fund_house_df, use_container_width=True, hide_index=True)
+                    st.subheader("Ticker View")
+                    ticker_summary_df = summarize_by_ticker(house_base_df, "Date")
+                    if ticker_summary_df.empty:
+                        st.info("No ticker-wise fund-house summary found for these fresh buys.")
+                    else:
+                        st.dataframe(ticker_summary_df, use_container_width=True, hide_index=True)
             else:
-                st.dataframe(repeated_buy_df, use_container_width=True, hide_index=True)
+                house_base_df = get_repeated_buy_table(
+                    bulk_df,
+                    BULK_HOUSE_LOOKBACK_LABEL,
+                    date.today(),
+                    house_min_buy_count,
+                )
+                # house_base_df = apply_market_cap_filter(house_base_df, static_df, min_market_cap_cr)
+                fund_house_df = summarize_by_fund_house(house_base_df, "Latest Buy Date")
+                if fund_house_df.empty:
+                    st.info("No fund-house repeated buys found for the current 1Y view.")
+                else:
+                    st.caption("Fund-house view uses a fixed 1Y lookback and is sorted by latest buy date.")
+                    st.dataframe(fund_house_df, use_container_width=True, hide_index=True)
+                    st.subheader("Ticker View")
+                    ticker_summary_df = summarize_by_ticker(fund_house_df, "Latest Buy Date")
+                    if ticker_summary_df.empty:
+                        st.info("No ticker-wise fund-house summary found for these repeated buys.")
+                    else:
+                        st.dataframe(ticker_summary_df, use_container_width=True, hide_index=True)
+
+
+if __name__ == "__main__":
+    df=pd.read_parquet("/Users/shrinivasdachawar/Downloads/My_docccc/zzti/strategies/data/deals_data/bulk_deals.parquet")
+    df=df.sort_values(by="Date", ascending=False).reset_index(drop=True)
+    house_base_df = get_fresh_buy_table(df, FUND_HOUSE_LOOKBACK_LABEL, date.today())
+    fund_house_df = summarize_by_fund_house(house_base_df, "Date")
+    # fund_house_df.to_csv("/Users/shrinivasdachawar/Downloads/My_docccc/zzti/strategies/data/deals_data/fund_house_fresh_buy_summary.csv", index=False)
