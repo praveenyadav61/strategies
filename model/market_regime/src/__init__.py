@@ -1,0 +1,1 @@
+"""Market regime forecasting package."""
