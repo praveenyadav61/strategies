@@ -1,0 +1,7 @@
+feature,null_pct,unique_values,dominant_pct,variance,is_dead_feature,is_near_constant
+Daily_Support_Break,0.0,1,1.0,0.0,True,True
+Daily_Resistance_Break,0.0,1,1.0,0.0,True,True
+Weekly_Support_Break,0.0,1,1.0,0.0,True,True
+Weekly_Resistance_Break,0.0,1,1.0,0.0,True,True
+Monthly_Support_Break,0.0,1,1.0,0.0,True,True
+Monthly_Resistance_Break,0.0,1,1.0,0.0,True,True

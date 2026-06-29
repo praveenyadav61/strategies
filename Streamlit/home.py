@@ -580,7 +580,7 @@ elif page == "Audio Transcript":
             st.warning(f"Could not load saved records: {e}")
 
 elif page == "Bulk_Block_Deal":
-    render_bulk_block_page(bulk_deals_df, block_deals_df)
+    render_bulk_block_page(bulk_deals_df, block_deals_df, static_df, m_cap)
 
 elif page == "Trend_Follower":
     st.title("Trend Follower Scanner")
