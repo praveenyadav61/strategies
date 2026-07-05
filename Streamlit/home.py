@@ -14,7 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from modular_base_scanner import CupScanner
-from chart_plot import plot_cup_formation, plot_trend_follower_chart
+from chart_plot import plot_cup_formation, plot_custom_ohlcv_chart, plot_trend_follower_chart
 from trend_follower.final_trend_follower import EMAScanner
 from audio import build_transcript_pdf, load_saved_records, process_audio_request
 from Streamlit.earnings_summary import render_earnings_summary_page
@@ -110,6 +110,87 @@ def load_announcements_data():
         announcement_df["date"] = pd.to_datetime(announcement_df["date"], errors="coerce")
 
     return announcement_df
+
+
+@st.cache_data(show_spinner=False)
+def load_custom_data_center():
+    custom_path = ROOT_DIR / "data" / "static" / "custom_data_center.csv"
+    if not custom_path.exists():
+        raise FileNotFoundError(f"Custom data center file was not found: {custom_path}")
+
+    custom_df = pd.read_csv(custom_path)
+    if custom_df.empty:
+        raise ValueError("Custom data center file is empty.")
+
+    custom_df.columns = custom_df.columns.str.strip()
+    required_cols = ["date", "index_symbol", "open", "high", "low", "close", "volume"]
+    missing_cols = [col for col in required_cols if col not in custom_df.columns]
+    if missing_cols:
+        raise ValueError(f"Custom data center file is missing required columns: {missing_cols}")
+
+    custom_df["Date"] = pd.to_datetime(
+        custom_df["date"].astype(str),
+        format="%Y%m%d",
+        errors="coerce",
+    )
+    if custom_df["Date"].isna().any():
+        bad_dates = custom_df.loc[custom_df["Date"].isna(), "date"].head(5).tolist()
+        raise ValueError(f"Custom data center file has invalid date values: {bad_dates}")
+
+    custom_df = custom_df.rename(
+        columns={
+            "open": "Open",
+            "high": "High",
+            "low": "Low",
+            "close": "Close",
+            "volume": "Volume",
+        }
+    )
+
+    ohlcv_cols = ["Open", "High", "Low", "Close", "Volume"]
+    for col in ohlcv_cols:
+        custom_df[col] = pd.to_numeric(custom_df[col], errors="coerce")
+
+    if custom_df[ohlcv_cols].isna().any().any():
+        raise ValueError("Custom data center file has non-numeric OHLCV values.")
+
+    custom_df["index_symbol"] = custom_df["index_symbol"].astype(str).str.strip()
+    if "turnover" in custom_df.columns:
+        custom_df["turnover"] = pd.to_numeric(custom_df["turnover"], errors="coerce")
+
+    custom_df = custom_df.set_index("Date").sort_index()
+    return custom_df
+
+
+@st.cache_data(show_spinner=False)
+def load_nasdaq_comparison(start_date, end_date):
+    import yfinance as yf
+
+    start_ts = pd.to_datetime(start_date)
+    end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+    nasdaq_df = yf.download(
+        "^IXIC",
+        start=start_ts,
+        end=end_ts,
+        interval="1d",
+        progress=False,
+    )
+
+    if nasdaq_df is None or nasdaq_df.empty:
+        raise FileNotFoundError("No Nasdaq Composite data returned from yfinance.")
+
+    if isinstance(nasdaq_df.columns, pd.MultiIndex):
+        nasdaq_df.columns = nasdaq_df.columns.get_level_values(0)
+
+    required_cols = ["Open", "High", "Low", "Close", "Volume"]
+    missing_cols = [col for col in required_cols if col not in nasdaq_df.columns]
+    if missing_cols:
+        raise ValueError(f"Nasdaq data is missing required columns: {missing_cols}")
+
+    nasdaq_df = nasdaq_df[required_cols].dropna(subset=["Close"])
+    nasdaq_df.index = pd.to_datetime(nasdaq_df.index).normalize()
+    nasdaq_df = nasdaq_df[~nasdaq_df.index.duplicated(keep="last")].sort_index()
+    return nasdaq_df
 
 
 def format_announcements_table(announcement_df):
@@ -268,7 +349,7 @@ announcements_df = load_announcements_data()
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Choose a page",
-    ["Home", "Base Formation", "Announcements", "Earnings Summary", "Bulk_Block_Deal", "Trend_Follower", "Audio Transcript"],
+    ["Home", "Base Formation", "Announcements", "Earnings Summary", "Bulk_Block_Deal", "Trend_Follower", "Custom Data Center", "Audio Transcript"],
 )
 m_cap =st.sidebar.number_input("Market Cap Filter (in Crores)", min_value=10, value=1000, step=1000000000)
 if page == "Home":
@@ -578,6 +659,115 @@ elif page == "Audio Transcript":
                 st.dataframe(records_df[display_cols], use_container_width=True, hide_index=True)
         except Exception as e:
             st.warning(f"Could not load saved records: {e}")
+
+elif page == "Custom Data Center":
+    st.title("Custom Data Center")
+
+    try:
+        custom_df = load_custom_data_center()
+    except Exception as e:
+        st.error(f"Could not load custom data center CSV: {e}")
+        custom_df = pd.DataFrame()
+
+    if not custom_df.empty:
+        symbols = sorted(custom_df["index_symbol"].dropna().unique().tolist())
+        selected_symbol = st.selectbox(
+            "Select Symbol",
+            options=symbols,
+            index=0,
+            key="custom_data_center_symbol",
+        )
+
+        symbol_df = custom_df[custom_df["index_symbol"] == selected_symbol].copy()
+        min_date = symbol_df.index.min().date()
+        max_date = symbol_df.index.max().date()
+
+        metrics = st.columns(5)
+        metrics[0].metric("Symbol", selected_symbol)
+        metrics[1].metric("Start", min_date.isoformat())
+        metrics[2].metric("End", max_date.isoformat())
+        metrics[3].metric("Rows", f"{len(symbol_df):,}")
+        metrics[4].metric("Latest Close", f"{symbol_df['Close'].iloc[-1]:,.2f}")
+
+        filter_col1, filter_col2 = st.columns(2)
+        with filter_col1:
+            start_date = st.date_input(
+                "Start Date",
+                value=min_date,
+                min_value=min_date,
+                max_value=max_date,
+                key="custom_data_center_start_date",
+            )
+        with filter_col2:
+            end_date = st.date_input(
+                "End Date",
+                value=max_date,
+                min_value=min_date,
+                max_value=max_date,
+                key="custom_data_center_end_date",
+            )
+
+        ma_col1, ma_col2, ma_col3, ma_col4 = st.columns(4)
+        enabled_mas = []
+        with ma_col1:
+            if st.checkbox("EMA 10", value=True, key="custom_data_center_ema10"):
+                enabled_mas.append("ema10")
+        with ma_col2:
+            if st.checkbox("EMA 20", value=True, key="custom_data_center_ema20"):
+                enabled_mas.append("ema20")
+        with ma_col3:
+            if st.checkbox("SMA 50", value=True, key="custom_data_center_sma50"):
+                enabled_mas.append("sma50")
+        with ma_col4:
+            if st.checkbox("SMA 200", value=True, key="custom_data_center_sma200"):
+                enabled_mas.append("sma200")
+
+        show_nasdaq_comparison = st.checkbox(
+            "NASDAQ comparison",
+            value=True,
+            key="custom_data_center_nasdaq_comparison",
+        )
+
+        if start_date > end_date:
+            st.error("Start Date must be before or equal to End Date.")
+        else:
+            filtered_df = symbol_df[
+                symbol_df.index.date >= start_date
+            ]
+            filtered_df = filtered_df[
+                filtered_df.index.date <= end_date
+            ]
+
+            st.caption(f"Showing {len(filtered_df):,} rows from {start_date} to {end_date}.")
+            if filtered_df.empty:
+                st.info("No custom data center rows found for the selected date range.")
+            else:
+                nasdaq_df = None
+                if show_nasdaq_comparison:
+                    try:
+                        nasdaq_df = load_nasdaq_comparison(start_date, end_date)
+                    except Exception as e:
+                        st.warning(f"Could not load Nasdaq comparison data: {e}")
+
+                fig = plot_custom_ohlcv_chart(
+                    filtered_df,
+                    selected_symbol,
+                    enabled_mas=enabled_mas,
+                    comparison_df=nasdaq_df,
+                    comparison_label="NASDAQ Composite",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                with st.expander("Raw Data"):
+                    raw_cols = [
+                        col
+                        for col in ["date", "index_symbol", "Open", "High", "Low", "Close", "Volume", "turnover"]
+                        if col in filtered_df.columns
+                    ]
+                    st.dataframe(
+                        filtered_df[raw_cols],
+                        use_container_width=True,
+                    )
 
 elif page == "Bulk_Block_Deal":
     render_bulk_block_page(bulk_deals_df, block_deals_df, static_df, m_cap)

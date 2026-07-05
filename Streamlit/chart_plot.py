@@ -499,6 +499,81 @@ def _prepare_trend_follower_data(df_daily):
     return df
 
 
+def _prepare_custom_ohlcv_data(df_daily):
+    """Prepare normalized daily OHLCV data for the custom data center chart."""
+    df = df_daily.copy()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.set_index("Date")
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+
+    df = df.sort_index()
+    df["ema10"] = df["Close"].ewm(span=10, adjust=False).mean()
+    df["ema20"] = df["Close"].ewm(span=20, adjust=False).mean()
+    df["sma50"] = df["Close"].rolling(50).mean()
+    df["sma200"] = df["Close"].rolling(200).mean()
+    return df
+
+
+def plot_custom_ohlcv_chart(
+    df_daily,
+    symbol,
+    enabled_mas=None,
+    lookback=None,
+    comparison_df=None,
+    comparison_label="NASDAQ Composite",
+):
+    df = _prepare_custom_ohlcv_data(df_daily)
+    if lookback is not None:
+        df = df.tail(lookback)
+
+    if enabled_mas is None:
+        enabled_mas = ["ema10", "ema20", "sma50", "sma200"]
+    enabled_mas = set(enabled_mas)
+    ma_columns = [
+        ("ema10", "EMA 10", "#f59e0b"),
+        ("ema20", "EMA 20", "#2563eb"),
+        ("sma50", "SMA 50", "#16a34a"),
+        ("sma200", "SMA 200", "#dc2626"),
+    ]
+    ma_columns = [ma for ma in ma_columns if ma[0] in enabled_mas]
+
+    chart = LayeredPriceChart(df, symbol, rows=2, row_heights=[0.75, 0.25])
+    chart = (
+        chart
+        .add_candles(name="Price")
+        .add_ema_lines(ma_columns=ma_columns)
+        .add_volume_bars()
+        .update_layout(title=f"{symbol} - Custom Data Center", height=780, show_range_slider=False)
+        .update_axis_titles(price_title="Price", volume_title="Volume")
+    )
+
+    if comparison_df is not None and not comparison_df.empty:
+        comparison = _prepare_custom_ohlcv_data(comparison_df)
+        comparison = comparison.loc[comparison.index.intersection(df.index)]
+        if not comparison.empty and comparison["Close"].iloc[0] != 0:
+            rebased_close = comparison["Close"] / comparison["Close"].iloc[0] * df["Close"].iloc[0]
+            chart.fig.add_trace(
+                go.Scatter(
+                    x=comparison.index,
+                    y=rebased_close,
+                    mode="lines",
+                    name=f"{comparison_label} (rebased)",
+                    line=dict(color="#7c3aed", width=2, dash="dot"),
+                ),
+                row=1,
+                col=1,
+            )
+
+    return chart.finalize()
+
+
 def plot_trend_follower_chart(df_daily, symbol, result_row=None, lookback=120):
     df = _prepare_trend_follower_data(df_daily).tail(lookback)
 

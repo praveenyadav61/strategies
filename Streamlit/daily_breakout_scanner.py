@@ -54,6 +54,8 @@ def detect_breakouts(base_df):
         today = daily_df.index[-1]
         close_today = float(daily_df["Close"].iloc[-1])
         close_prev = float(daily_df["Close"].iloc[-2])
+        day_move = close_today - close_prev
+        day_move_pct = (day_move / close_prev) * 100 if close_prev else float("nan")
 
         if close_prev <= pivot_price < close_today:
             breakouts.append(
@@ -65,6 +67,8 @@ def detect_breakouts(base_df):
                     "pivot_index_pos": int(row.get("pivot_index_pos", -1)),
                     "close_prev": close_prev,
                     "close_today": close_today,
+                    "day_move": day_move,
+                    "day_move_pct": day_move_pct,
                     "depth": float(row.get("Depth", float("nan"))),
                     "recovery": float(row.get("Recovery", float("nan"))),
                     "ath": float(row.get("ATH", float("nan"))),
@@ -128,12 +132,19 @@ def notify_new_breakouts(breakout_df):
                 (row["close_today"] - row["pivot_price"])
                 / row["pivot_price"]
             ) * 100
+            day_move = row.get("day_move", row["close_today"] - row["close_prev"])
+            day_move_pct = row.get(
+                "day_move_pct",
+                (day_move / row["close_prev"]) * 100 if row["close_prev"] else float("nan"),
+            )
 
             lines.append(
                 f"• {row['symbol']}\n"
                 f"Pivot: {row['pivot_price']:.2f}\n"
+                f"Previous Close: {row['close_prev']:.2f}\n"
                 f"Close: {row['close_today']:.2f} "
-                f"({breakout_pct:.2f}%)\n"
+                f"({breakout_pct:.2f}% above pivot)\n"
+                f"Day Move: {day_move:+.2f} ({day_move_pct:+.2f}%)\n"
             )
 
         message = "\n".join(lines)
