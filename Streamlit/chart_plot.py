@@ -8,10 +8,10 @@ from base_formation import calculate_cup_metrics, get_tight_close_groups
 default_params = {
     "MIN_WEEKS": 8,
     "MAX_WEEKS": 52,
+    "MIN_WEEKLY_BARS_REQUIRED": 10,
     "MIN_DEPTH": 15 / 100.0,
     "MAX_DEPTH": 60 / 100.0,
     "RECOVERY_MIN": 60 / 100.0,
-    "RECOVERY_MAX": 120 / 100.0,
     "ATR_WINDOW": 14,
     "COMPRESSION_LOOKBACK": 10,
 }
@@ -43,13 +43,13 @@ def get_cup_reference_points(df, params):
     Returning plain values keeps the plotting methods simple and makes the
     annotation layer optional.
     """
-    max_weeks = params["MAX_WEEKS"]
     min_weeks = params["MIN_WEEKS"]
+    max_weeks = params.get("MAX_WEEKS")
 
-    if len(df) < max_weeks:
+    if len(df) < min_weeks + 2:
         return None
 
-    window = df.iloc[-max_weeks:].copy()
+    window = df.tail(max_weeks).copy() if max_weeks else df.copy()
     peak_search_window = window.iloc[:-min_weeks]
     if peak_search_window.empty:
         return None
