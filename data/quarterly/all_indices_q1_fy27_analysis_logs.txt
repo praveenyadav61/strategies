@@ -33,79 +33,82 @@ Weighted Operating Profit QoQ Growth: -2.82%
 Normal Profit QoQ Growth (index aggregate): -1.25%
 Weighted Profit QoQ Growth: -1.83%
 
-Analysis generated at: 2026-07-14T15:03:06.125428
+Analysis generated at: 2026-07-15T15:01:44.037224
 ================================================================================
 
 ================================================================================
 Q1 FY27 Earnings Analysis - NIFTY MIDCAP 100
 ================================================================================
 
-Total Declared Companies (Q1 FY27): 3
-Companies with Q1 FY26 comparison: 2
+Total Declared Companies (Q1 FY27): 5
+Companies with Q1 FY26 comparison: 3
 
 
 TICKER             CUR_REV     PY_REV   YOY_REV%    QOQ_REV   QOQ_REV%     CUR_OP      PY_OP    YOY_OP%     QOQ_OP    QOQ_OP%   CUR_PROFIT    PY_PROFIT YOY_PROFIT%   QOQ_PROFIT QOQ_PROFIT%
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+GROWW.NS        15010000000 9040000000     66.04% 15050000000     -0.27% 9700000000 4830000000    100.83% 9380000000      3.41%   7350000000   3780000000      94.44%   6860000000       7.14%
 ICICIAMC.NS     15642200000        nan        N/A 15170100000      3.11% 12806500000        nan        N/A 10385700000     23.31%   9646300000          nan         N/A   7634200000      26.36%
 INDIANB.NS      180950000000 162850000000     11.11% 174880000000      3.47%        nan        nan        N/A        nan        N/A  33570000000  22770000000      47.43%  31740000000       5.77%
 LTF.NS          52130000000 42600000000     22.37% 47710000000      9.26%        nan        nan        N/A        nan        N/A   9160000000   7010000000      30.67%   8090000000      13.23%
+TATAELXSI.NS    10211075000        nan        N/A 9937512000      2.75% 2324569000        nan        N/A 2677725000    -13.19%   1705987000          nan         N/A   2203513000     -22.58%
 
 Index statistics omitted; focus on aggregate index growth metrics.
 
 ====================================================================================================
 Index-Level Summary:
 ====================================================================================================
-Declared Index Weight Represented: 2.07%
+Declared Index Weight Represented: 2.92%
 
-Normal Revenue YoY Growth (index aggregate): 13.45%
-Weighted Revenue YoY Growth: 13.01%
-Normal Operating Profit YoY Growth (index aggregate): N/A
-Weighted Operating Profit YoY Growth: N/A
-Normal Profit YoY Growth (index aggregate): 43.49%
-Weighted Profit YoY Growth: 44.21%
+Normal Revenue YoY Growth (index aggregate): 15.67%
+Weighted Revenue YoY Growth: 14.02%
+Normal Operating Profit YoY Growth (index aggregate): 100.83%
+Weighted Operating Profit YoY Growth: 100.83%
+Normal Profit YoY Growth (index aggregate): 49.23%
+Weighted Profit YoY Growth: 46.90%
 
-Normal Revenue QoQ Growth (index aggregate): 4.61%
-Weighted Revenue QoQ Growth: 4.45%
-Normal Operating Profit QoQ Growth (index aggregate): 23.31%
-Weighted Operating Profit QoQ Growth: 23.31%
-Normal Profit QoQ Growth (index aggregate): 10.35%
-Weighted Profit QoQ Growth: 8.30%
+Normal Revenue QoQ Growth (index aggregate): 4.26%
+Weighted Revenue QoQ Growth: 4.28%
+Normal Operating Profit QoQ Growth (index aggregate): 10.64%
+Weighted Operating Profit QoQ Growth: 9.51%
+Normal Profit QoQ Growth (index aggregate): 8.68%
+Weighted Profit QoQ Growth: 7.54%
 
-Analysis generated at: 2026-07-14T15:03:06.142441
+Analysis generated at: 2026-07-15T15:01:44.058700
 ================================================================================
 
 ================================================================================
 Q1 FY27 Earnings Analysis - NIFTY SMALLCAP 100
 ================================================================================
 
-Total Declared Companies (Q1 FY27): 1
-Companies with Q1 FY26 comparison: 1
+Total Declared Companies (Q1 FY27): 2
+Companies with Q1 FY26 comparison: 2
 
 
 TICKER             CUR_REV     PY_REV   YOY_REV%    QOQ_REV   QOQ_REV%     CUR_OP      PY_OP    YOY_OP%     QOQ_OP    QOQ_OP%   CUR_PROFIT    PY_PROFIT YOY_PROFIT%   QOQ_PROFIT QOQ_PROFIT%
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ANANDRATHI.NS   3220000000 2740000000     17.52% 2880000000     11.81% 1090000000 1280000000    -14.84%  850000000     28.24%   1630000000    940000000      73.40%   1030000000      58.25%
+HSCL.NS         14318800000 11180000000     28.08% 12880000000     11.17%        nan 2450000000        N/A 2420000000        N/A   2295200000   1790000000      28.22%   2080000000      10.35%
 
 Index statistics omitted; focus on aggregate index growth metrics.
 
 ====================================================================================================
 Index-Level Summary:
 ====================================================================================================
-Declared Index Weight Represented: 1.42%
+Declared Index Weight Represented: 2.66%
 
-Normal Revenue YoY Growth (index aggregate): 17.52%
-Weighted Revenue YoY Growth: 17.52%
-Normal Operating Profit YoY Growth (index aggregate): -14.84%
-Weighted Operating Profit YoY Growth: -14.84%
-Normal Profit YoY Growth (index aggregate): 73.40%
-Weighted Profit YoY Growth: 73.40%
+Normal Revenue YoY Growth (index aggregate): 26.00%
+Weighted Revenue YoY Growth: 25.76%
+Normal Operating Profit YoY Growth (index aggregate): -70.78%
+Weighted Operating Profit YoY Growth: -68.12%
+Normal Profit YoY Growth (index aggregate): 43.78%
+Weighted Profit YoY Growth: 45.19%
 
-Normal Revenue QoQ Growth (index aggregate): 11.81%
-Weighted Revenue QoQ Growth: 11.81%
-Normal Operating Profit QoQ Growth (index aggregate): 28.24%
-Weighted Operating Profit QoQ Growth: 28.24%
-Normal Profit QoQ Growth (index aggregate): 58.25%
-Weighted Profit QoQ Growth: 58.25%
+Normal Revenue QoQ Growth (index aggregate): 11.29%
+Weighted Revenue QoQ Growth: 11.30%
+Normal Operating Profit QoQ Growth (index aggregate): -66.67%
+Weighted Operating Profit QoQ Growth: -63.22%
+Normal Profit QoQ Growth (index aggregate): 26.21%
+Weighted Profit QoQ Growth: 27.68%
 
-Analysis generated at: 2026-07-14T15:03:06.159275
+Analysis generated at: 2026-07-15T15:01:44.079374
 ================================================================================
