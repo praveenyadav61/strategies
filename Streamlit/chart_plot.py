@@ -430,8 +430,14 @@ class LayeredCupChart(LayeredPriceChart):
         left_high_price = result_row.get("left_high", result_row.get("peak_price"))
         bottom_date = result_row.get("base_low_index", result_row.get("bottom_idx"))
         bottom_price = result_row.get("base_low", result_row.get("bottom_price"))
-        pivot_date = result_row.get("pivot_index")
-        pivot_price = result_row.get("pivot_price", result_row.get("pivot"))
+        pivot_date = result_row.get("selected_pivot_date", result_row.get("pivot_index"))
+        pivot_price = result_row.get(
+            "selected_pivot",
+            result_row.get("pivot_price", result_row.get("pivot")),
+        )
+        breakout_range_low = result_row.get("breakout_range_low")
+        breakout_range_high = result_row.get("breakout_range_high")
+        breakout_range_pct = result_row.get("breakout_range_pct", 0.10)
         breakout_date = result_row.get("breakout_date")
         breakout_close = result_row.get("breakout_close")
 
@@ -463,15 +469,19 @@ class LayeredCupChart(LayeredPriceChart):
 
         pivot_marker_date = self._nearest_index(pivot_date)
         if pivot_marker_date is not None and pivot_price is not None and not pd.isna(pivot_price):
-            pivot_detected = bool(result_row.get("pivot_detected", True))
-            pivot_label = "Pivot" if pivot_detected else "Pivot Fallback"
-            self.fig.add_shape(
-                type="line",
-                x0=pivot_marker_date,
-                y0=float(pivot_price),
-                x1=self.df.index[-1],
-                y1=float(pivot_price),
-                line=dict(color="#f59e0b", width=2, dash="dot" if pivot_detected else "dash"),
+            pivot_source = result_row.get("pivot_source")
+            pivot_label = {
+                "HANDLE": "Handle Pivot",
+                "LEFT_HIGH": "Left-High Pivot",
+                "LEFT_HIGH_HANDLE_MERGED": "Merged Pivot",
+            }.get(pivot_source, "Pivot")
+            self.fig.add_hline(
+                y=float(pivot_price),
+                line_color="#f59e0b",
+                line_width=1,
+                line_dash="solid",
+                annotation_text=f"Pivot {float(pivot_price):.2f}",
+                annotation_position="top right",
                 row=row,
                 col=col,
             )
@@ -484,6 +494,29 @@ class LayeredCupChart(LayeredPriceChart):
                 row=row,
                 col=col,
                 textposition="bottom center",
+            )
+
+        range_pct_label = (
+            f"{float(breakout_range_pct) * 100:g}%"
+            if breakout_range_pct is not None and not pd.isna(breakout_range_pct)
+            else "10%"
+        )
+        lifecycle_range_levels = [
+            (breakout_range_high, f"Range +{range_pct_label}", "#16a34a", "dot", "top right"),
+            (breakout_range_low, f"Range -{range_pct_label}", "#dc2626", "dot", "bottom right"),
+        ]
+        for level, label, color, dash, annotation_position in lifecycle_range_levels:
+            if level is None or pd.isna(level):
+                continue
+            self.fig.add_hline(
+                y=float(level),
+                line_color=color,
+                line_width=1,
+                line_dash=dash,
+                annotation_text=f"{label} {float(level):.2f}",
+                annotation_position=annotation_position,
+                row=row,
+                col=col,
             )
 
         self._add_price_marker(

@@ -137,18 +137,20 @@ def lifecycle_bucket(row):
 
     if status == "NEAR_PIVOT":
         return "Near Pivot"
-    if status in [
-        "BREAKOUT_ATTEMPT",
-        "BREAKOUT_CONFIRMED",
-        "HANDLE_BREAKOUT_ATTEMPT",
-        "HANDLE_BREAKOUT_CONFIRMED",
-        "CLOSE_RESISTANCE_CLEARED",
-    ]:
-        return "Breakout Watch"
-    if status in ["PULLBACK_TO_PIVOT", "PIVOT_RETEST_WEAK", "HOLDING_PIVOT", "RESETTING"]:
-        return "Pullbacks"
-    if status == "EXTENDED":
-        return "Extended"
+    if status == "HANDLE_READY":
+        return "Handle Ready"
+    if status in ["BREAKOUT_BUY_RANGE", "BREAKOUT_RETEST_RANGE"]:
+        return "Breakout Range"
+    if status == "POST_SUCCESS_REENTRY_RANGE":
+        return "Success Re-entry"
+    if status == "BREAKOUT_SUCCESS":
+        return "Successful Breakout"
+    if status == "BREAKOUT_STALLED":
+        return "Stalled"
+    if status == "BREAKOUT_RANGE_BREACH":
+        return "Range Breach"
+    if status == "RESETTING":
+        return "Resetting"
     if status == "FAILED":
         return "Failed"
     if pd.notna(distance) and distance > 0:
@@ -192,24 +194,25 @@ def lifecycle_preferred_table(df):
     # Keep the scan list focused on the decision fields. Company metadata,
     # review tags, dates, and diagnostics are shown after a row is selected.
     preferred_cols = [
-        "rank",
         "Symbol",
         "lifecycle_status",
         "tracking_state",
+        "lifecycle_phase",
+        "current_zone",
+        "pivot_source",
+        "selected_pivot",
+        "distance_from_pivot_pct",
         "scan_window_weeks",
         "Depth",
         "recovery_pct",
-        "prior_uptrend_pct",
-        "distance_from_pivot_pct",
-        "major_pivot",
         "left_high_pivot",
         "handle_high_pivot",
-        "resistance_cluster_pivot",
-        "range_high_pivot",
-        "range_close_pivot",
-        "tracking_eligible",
+        "handle_pullback_pct",
+        "handle_max_pullback_pct",
+        "breakout_range_low",
+        "breakout_range_high",
         "breakout_date",
-        "holding_pivot",
+        "breakout_success_date",
     ]
     cols = [col for col in preferred_cols if col in df.columns]
     return df[cols]
@@ -241,42 +244,33 @@ def render_lifecycle_selected_details(selected_row):
         "setup_reason",
     ]
     pivot_and_diagnostics = [
-        "score",
-        "score_delta",
-        "weekly_change",
         "Also Valid Windows",
         "base_duration_weeks",
         "peak_to_low_weeks",
         "pivot_detected",
-        "major_pivot_date",
-        "major_pivot_validated",
-        "major_breakout_buffer",
-        "major_confirmation_level",
-        "major_failure_buffer",
-        "major_failure_level",
+        "selected_pivot_date",
+        "breakout_buffer",
+        "confirmation_level",
+        "left_high_confirmation_level",
+        "success_level",
+        "failure_buffer",
+        "hard_failure_level",
         "hard_failure",
         "persistent_failure",
+        "range_breach",
+        "breakout_stalled",
+        "post_success_reentry",
+        "breakout_success",
+        "breakout_success_close",
+        "left_high_cleared",
+        "handle_invalidated",
         "left_high_pivot_date",
         "handle_high_date",
+        "handle_low",
+        "handle_low_date",
         "handle_pullback_pct",
-        "resistance_cluster_touches",
-        "resistance_cluster_start",
-        "resistance_cluster_end",
-        "range_high_pivot_date",
-        "close_high_pivot_date",
-        "range_close_pivot_date",
-        "handle_pivot",
-        "handle_breakout_buffer",
-        "handle_confirmation_level",
-        "handle_failure_buffer",
-        "handle_failure_level",
-        "handle_breakout_date",
-        "handle_breakout_failed",
-        "legacy_pivot_price",
-        "legacy_pivot_detected",
-        "active_pivot_price",
-        "active_pivot_type",
-        "active_pivot_distance_pct",
+        "handle_max_pullback_pct",
+        "handle_duration_weeks",
         "weeks_since_breakout",
         "gain_since_breakout_pct",
         "max_gain_after_breakout_pct",
@@ -428,13 +422,18 @@ def render_review_funnel(stage_results, lifecycle_df):
             "prior_uptrend_lookback_weeks",
             "prior_uptrend_advance_weeks",
             "peak_to_low_weeks",
-            "pivot_price",
+            "pivot_source",
+            "selected_pivot",
+            "handle_high_pivot",
+            "handle_pullback_pct",
+            "handle_max_pullback_pct",
             "pivot_detected",
             "distance_from_pivot_pct",
+            "lifecycle_phase",
+            "current_zone",
             "lifecycle_status",
             "setup_reason",
             "tracking_eligible",
-            "score",
         ]
         stage_cols = [col for col in stage_preferred_cols if col in stage_df.columns]
         stage_display_df = stage_df[stage_cols]
@@ -486,8 +485,13 @@ def render_base_phase_page(static_df, m_cap):
     metric_cols[0].metric("Candidates", len(lifecycle_df))
     metric_cols[1].metric("Near Pivot", int((lifecycle_df["lifecycle_status"] == "NEAR_PIVOT").sum()))
     metric_cols[2].metric("Breakout+", int(lifecycle_df["breakout_date"].notna().sum()))
-    metric_cols[3].metric("Avg Score", f"{lifecycle_df['score'].mean():.1f}")
-    metric_cols[4].metric("Pivot Detected", int(lifecycle_df["pivot_detected"].sum()))
+    metric_cols[3].metric("Handle Ready", int((lifecycle_df["lifecycle_status"] == "HANDLE_READY").sum()))
+    successful_count = (
+        int(lifecycle_df["breakout_success"].fillna(False).sum())
+        if "breakout_success" in lifecycle_df.columns
+        else 0
+    )
+    metric_cols[4].metric("Successful", successful_count)
 
     render_review_funnel(stage_results, lifecycle_df)
 
@@ -516,10 +520,6 @@ def render_base_phase_page(static_df, m_cap):
         display_df = display_df[display_df["pivot_detected"] == True]
 
     display_df = add_lifecycle_display_columns(display_df, static_df, m_cap)
-    display_df = display_df.sort_values(
-        by=[col for col in ["score", "rank"] if col in display_df.columns],
-        ascending=[False, True][:len([col for col in ["score", "rank"] if col in display_df.columns])],
-    )
 
     st.caption(f"Showing {len(display_df)} lifecycle candidates after UI filters.")
     render_lifecycle_table_with_chart(display_df, "base_phase", source_df=lifecycle_df)

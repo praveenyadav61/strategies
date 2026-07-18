@@ -54,11 +54,8 @@ DEFAULT_PARAMS = {
     "ATR_WINDOW": 14,
     "COMPRESSION_LOOKBACK": 10,
     "TRACKING_HANDLE_LOOKBACK_WEEKS": 10,
-    "TRACKING_CLUSTER_LOOKBACK_WEEKS": 12,
-    "TRACKING_CLUSTER_TOLERANCE_PCT": 0.03,
-    "TRACKING_MIN_CLUSTER_TOUCHES": 2,
     "TRACKING_HANDLE_MIN_PULLBACK_PCT": 0.03,
-    "TRACKING_HANDLE_MAX_PULLBACK_PCT": 0.18,
+    "HANDLE_MIN_DURATION_WEEKS": 2,
     "PIVOT_MIN_LEFT_HIGH_RATIO": 0.85,
     "PIVOT_MAX_LEFT_HIGH_RATIO": 1.05,
     "HANDLE_MAJOR_MERGE_TOLERANCE_PCT": 0.02,
@@ -66,6 +63,8 @@ DEFAULT_PARAMS = {
     "BREAKOUT_ATR_BUFFER_MULTIPLIER": 0.20,
     "FAILURE_PRICE_BUFFER_PCT": 0.01,
     "FAILURE_ATR_BUFFER_MULTIPLIER": 0.25,
+    "BREAKOUT_RANGE_PCT": 0.10,
+    "BREAKOUT_STALL_WEEKS": 10,
 }
 
 
@@ -115,42 +114,6 @@ def long_frame_to_stage_results(stage_df):
         stage: stage_df[stage_df["stage"] == stage].drop(columns=["stage"]).reset_index(drop=True)
         for stage in STAGE_KEYS
     }
-
-
-def find_pivot(df, peak_idx, left_high, bottom_idx, logger=None, symbol=None):
-    pivot = None
-    pivot_idx = None
-    pivot_min = left_high * 0.85
-    pivot_max = left_high * 1.05
-
-    for i in range(bottom_idx + 1, len(df) - 4):
-        curr_high = df.iloc[i]["High"]
-        if not (pivot_min <= curr_high <= pivot_max):
-            continue
-        if curr_high < df.iloc[i - 1:i + 2]["High"].max():
-            continue
-
-        future_lows = df.iloc[i + 1:i + 5]["Low"]
-        drop = (curr_high - future_lows.min()) / curr_high
-        if not (0.05 <= drop <= 0.40):
-            continue
-
-        future_highs = df.iloc[i + 1:]["High"]
-        if not future_highs.empty and future_highs.max() > curr_high * 1.02:
-            continue
-
-        pivot = curr_high
-        pivot_idx = i
-
-    pivot_detected = pivot is not None
-    if pivot_detected and logger:
-        logger.debug(f"Pivot: {pivot} for {symbol} at {df.index[pivot_idx]}")
-
-    if pivot is None:
-        pivot = left_high
-        pivot_idx = peak_idx
-
-    return pivot, pivot_idx, pivot_detected
 
 
 def resolve_prior_uptrend_lookback(scan_window_weeks, params):
@@ -217,8 +180,8 @@ def build_setup_reason(row):
     depth = row.get("Depth")
     recovery = row.get("recovery_pct")
     status = row.get("lifecycle_status")
-    active_pivot_type = row.get("active_pivot_type")
-    distance = row.get("active_pivot_distance_pct", row.get("distance_from_pivot_pct"))
+    pivot_source = row.get("pivot_source")
+    distance = row.get("distance_from_pivot_pct")
     prior_pct = row.get("prior_uptrend_pct")
 
     if pd.notna(window):
@@ -229,8 +192,8 @@ def build_setup_reason(row):
         parts.append(f"{float(recovery) * 100:.0f}% recovery")
     if pd.notna(distance):
         parts.append(f"{float(distance) * 100:.1f}% from pivot")
-    if pd.notna(active_pivot_type):
-        parts.append(f"{active_pivot_type} pivot")
+    if pd.notna(pivot_source):
+        parts.append(f"{pivot_source} pivot")
     if pd.notna(prior_pct):
         parts.append(f"{float(prior_pct) * 100:.0f}% prior trend")
     if pd.notna(status):
@@ -413,30 +376,24 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
             },
         )
 
-        legacy_pivot, legacy_pivot_idx_i, legacy_pivot_detected = find_pivot(
-            window, peak_idx_i, peak_price, bottom_idx_i, logger, symbol
-        )
         tracking_eligible = bool(recovery_pct >= params.get("TRACKING_ELIGIBLE_RECOVERY_MIN", 0.85))
         pivot_lifecycle = calculate_pivot_lifecycle(
             window,
             float(peak_price),
             peak_idx,
             bottom_idx_i,
+            depth,
             params,
             tracking_eligible=tracking_eligible,
         )
-        pivot = float(pivot_lifecycle["major_pivot"])
-        pivot_date = pd.to_datetime(pivot_lifecycle.get("major_pivot_date"), errors="coerce")
+        pivot = float(pivot_lifecycle["selected_pivot"])
+        pivot_date = pd.to_datetime(pivot_lifecycle.get("selected_pivot_date"), errors="coerce")
         pivot_idx_i = (
             int(window.index.get_indexer([pivot_date], method="nearest")[0])
             if pd.notna(pivot_date)
             else peak_idx_i
         )
-        pivot_detected = bool(
-            pivot_lifecycle.get("major_pivot_validated", False)
-            or pd.notna(pivot_lifecycle.get("handle_high_pivot"))
-            or pivot_lifecycle.get("resistance_cluster_touches", 0) > 0
-        )
+        pivot_detected = bool(pivot_lifecycle.get("pivot_source") != "LEFT_HIGH")
         distance_from_left_high_pct = (latest_close - peak_price) / peak_price
         distance_from_pivot_pct = float(pivot_lifecycle["distance_from_pivot_pct"])
         pivot_row = {
@@ -453,9 +410,6 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
             "pivot_detected": bool(pivot_detected),
             "pivot_index": window.index[pivot_idx_i],
             "pivot_index_pos": int(pivot_idx_i),
-            "legacy_pivot_price": float(legacy_pivot),
-            "legacy_pivot_index": window.index[legacy_pivot_idx_i],
-            "legacy_pivot_detected": bool(legacy_pivot_detected),
             "distance_from_left_high_pct": float(distance_from_left_high_pct),
             "distance_from_pivot_pct": float(distance_from_pivot_pct),
             **pivot_lifecycle,
@@ -493,9 +447,6 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
             "pivot_detected": bool(pivot_detected),
             "pivot_index": window.index[pivot_idx_i],
             "pivot_index_pos": int(pivot_idx_i),
-            "legacy_pivot_price": float(legacy_pivot),
-            "legacy_pivot_index": window.index[legacy_pivot_idx_i],
-            "legacy_pivot_detected": bool(legacy_pivot_detected),
             "left_high": float(peak_price),
             "left_high_index": peak_idx,
             "base_low": float(bottom_price),
@@ -659,15 +610,11 @@ def normalize_tracking_dates(df):
         "base_low_index",
         "pivot_index",
         "breakout_date",
-        "major_pivot_date",
+        "selected_pivot_date",
         "left_high_pivot_date",
-        "range_high_pivot_date",
-        "range_close_pivot_date",
-        "close_high_pivot_date",
         "handle_high_date",
-        "handle_breakout_date",
-        "resistance_cluster_start",
-        "resistance_cluster_end",
+        "handle_low_date",
+        "breakout_success_date",
     ]
     normalized = df.copy()
     for column in date_columns:
@@ -747,34 +694,13 @@ def load_weekly_for_tracking(symbol, as_of_date, data_engine):
     ).dropna()
 
 
-def calculate_resistance_cluster_pivot(window, lookback, tolerance_pct, min_touches):
-    recent = window.tail(int(lookback)).copy()
-    if len(recent) < int(min_touches):
-        return {}
-
-    highs = recent["High"].dropna().sort_values(ascending=False)
-    best_cluster = []
-    best_price = np.nan
-    for price in highs:
-        band_low = price * (1 - tolerance_pct)
-        band_high = price * (1 + tolerance_pct)
-        cluster = recent[(recent["High"] >= band_low) & (recent["High"] <= band_high)]
-        if len(cluster) > len(best_cluster):
-            best_cluster = cluster
-            best_price = float(cluster["High"].max())
-
-    if len(best_cluster) < int(min_touches):
-        return {}
-
-    return {
-        "resistance_cluster_pivot": best_price,
-        "resistance_cluster_touches": int(len(best_cluster)),
-        "resistance_cluster_start": best_cluster.index.min(),
-        "resistance_cluster_end": best_cluster.index.max(),
-    }
-
-
-def calculate_handle_pivot(window, lookback, min_pullback_pct, max_pullback_pct):
+def calculate_handle_pivot(
+    window,
+    lookback,
+    min_pullback_pct,
+    max_pullback_pct,
+    min_duration_weeks=2,
+):
     recent = window.tail(int(lookback)).copy()
     if len(recent) < 3:
         return {}
@@ -787,14 +713,24 @@ def calculate_handle_pivot(window, lookback, min_pullback_pct, max_pullback_pct)
         if after_high.empty or high_price <= 0:
             continue
 
-        pullback_pct = (high_price - float(after_high["Low"].min())) / high_price
+        handle_low_date = after_high["Low"].idxmin()
+        handle_low = float(after_high.loc[handle_low_date, "Low"])
+        pullback_pct = (high_price - handle_low) / high_price
+        duration_weeks = (recent.index[-1] - recent.index[idx_pos]).days / 7
         recovered_near_high = latest_close >= high_price * (1 - max_pullback_pct)
-        if min_pullback_pct <= pullback_pct <= max_pullback_pct and recovered_near_high:
+        if (
+            duration_weeks >= float(min_duration_weeks)
+            and min_pullback_pct <= pullback_pct <= max_pullback_pct
+            and recovered_near_high
+        ):
             candidates.append(
                 {
                     "handle_high_pivot": high_price,
                     "handle_high_date": recent.index[idx_pos],
+                    "handle_low": handle_low,
+                    "handle_low_date": handle_low_date,
                     "handle_pullback_pct": float(pullback_pct),
+                    "handle_duration_weeks": round(float(duration_weeks), 1),
                 }
             )
 
@@ -824,91 +760,56 @@ def crossed_confirmation_level(previous_close, current_close, confirmation_level
     )
 
 
-def calculate_pivot_candidate_snapshot(source, left_high, left_high_date, params):
-    """Calculate raw pivot candidates using only information in ``source``.
-
-    ``source`` starts after the base bottom and ends before the candle being
-    evaluated for breakout. Values above 105% (configurable) of the left high
-    are never allowed to become pivots for the same base.
-    """
+def calculate_pivot_candidate_snapshot(source, left_high, left_high_date, base_depth, params):
+    """Select one actionable pivot: a valid handle, otherwise the left high."""
     pivot_min = float(left_high) * float(params.get("PIVOT_MIN_LEFT_HIGH_RATIO", 0.85))
     pivot_max = float(left_high) * float(params.get("PIVOT_MAX_LEFT_HIGH_RATIO", 1.05))
+    handle_max_pullback_pct = float(base_depth) / 3.0
     candidates = {
         "left_high_pivot": float(left_high),
         "left_high_pivot_date": left_high_date,
-        "range_high_pivot": np.nan,
-        "range_high_pivot_date": pd.NaT,
-        "range_close_pivot": np.nan,
-        "range_close_pivot_date": pd.NaT,
-        # Compatibility aliases retained while saved snapshots migrate.
-        "close_high_pivot": np.nan,
-        "close_high_pivot_date": pd.NaT,
-        "resistance_cluster_pivot": np.nan,
-        "resistance_cluster_touches": 0,
-        "resistance_cluster_start": pd.NaT,
-        "resistance_cluster_end": pd.NaT,
         "handle_high_pivot": np.nan,
         "handle_high_date": pd.NaT,
+        "handle_low": np.nan,
+        "handle_low_date": pd.NaT,
         "handle_pullback_pct": np.nan,
+        "handle_max_pullback_pct": float(handle_max_pullback_pct),
+        "handle_duration_weeks": np.nan,
+        "selected_pivot": float(left_high),
+        "selected_pivot_date": left_high_date,
+        "pivot_source": "LEFT_HIGH",
+        # Compatibility aliases used by charts and existing saved-state code.
         "major_pivot": float(left_high),
         "major_pivot_date": left_high_date,
-        "major_pivot_validated": False,
         "setup_atr": np.nan,
     }
     if source is None or source.empty:
         return candidates
 
-    valid_high_rows = source[(source["High"] >= pivot_min) & (source["High"] <= pivot_max)]
-    if not valid_high_rows.empty:
-        range_high_date = valid_high_rows["High"].idxmax()
-        candidates["range_high_pivot"] = float(valid_high_rows.loc[range_high_date, "High"])
-        candidates["range_high_pivot_date"] = range_high_date
-
-    valid_close_rows = source[(source["Close"] >= pivot_min) & (source["Close"] <= pivot_max)]
-    if not valid_close_rows.empty:
-        range_close_date = valid_close_rows["Close"].idxmax()
-        range_close = float(valid_close_rows.loc[range_close_date, "Close"])
-        candidates.update(
-            {
-                "range_close_pivot": range_close,
-                "range_close_pivot_date": range_close_date,
-                "close_high_pivot": range_close,
-                "close_high_pivot_date": range_close_date,
-            }
-        )
-
-    cluster = calculate_resistance_cluster_pivot(
-        valid_high_rows,
-        params.get("TRACKING_CLUSTER_LOOKBACK_WEEKS", 12),
-        params.get("TRACKING_CLUSTER_TOLERANCE_PCT", 0.03),
-        params.get("TRACKING_MIN_CLUSTER_TOUCHES", 2),
-    )
-    candidates.update(cluster)
-
     handle = calculate_handle_pivot(
         source,
         params.get("TRACKING_HANDLE_LOOKBACK_WEEKS", 10),
         params.get("TRACKING_HANDLE_MIN_PULLBACK_PCT", 0.03),
-        params.get("TRACKING_HANDLE_MAX_PULLBACK_PCT", 0.18),
+        handle_max_pullback_pct,
+        params.get("HANDLE_MIN_DURATION_WEEKS", 2),
     )
     handle_price = handle.get("handle_high_pivot", np.nan)
     if pd.notna(handle_price) and pivot_min <= float(handle_price) <= pivot_max:
         candidates.update(handle)
+        merge_tolerance = float(params.get("HANDLE_MAJOR_MERGE_TOLERANCE_PCT", 0.02))
+        if abs(float(handle_price) - float(left_high)) / float(left_high) <= merge_tolerance:
+            candidates["pivot_source"] = "LEFT_HIGH_HANDLE_MERGED"
+        else:
+            candidates.update(
+                {
+                    "selected_pivot": float(handle_price),
+                    "selected_pivot_date": candidates["handle_high_date"],
+                    "pivot_source": "HANDLE",
+                    "major_pivot": float(handle_price),
+                    "major_pivot_date": candidates["handle_high_date"],
+                }
+            )
 
-    range_high = candidates.get("range_high_pivot", np.nan)
-    if pd.notna(range_high) and float(range_high) > float(left_high):
-        candidates["major_pivot"] = float(range_high)
-        candidates["major_pivot_date"] = candidates["range_high_pivot_date"]
-
-    min_cluster_touches = int(params.get("TRACKING_MIN_CLUSTER_TOUCHES", 2))
-    candidates["major_pivot_validated"] = bool(
-        candidates.get("resistance_cluster_touches", 0) >= min_cluster_touches
-        or (
-            pd.notna(range_high)
-            and abs(float(range_high) - float(left_high)) / float(left_high)
-            <= float(params.get("TRACKING_CLUSTER_TOLERANCE_PCT", 0.03))
-        )
-    )
     if "atr" in source.columns and pd.notna(source["atr"].iloc[-1]):
         candidates["setup_atr"] = float(source["atr"].iloc[-1])
     return candidates
@@ -961,237 +862,248 @@ def calculate_breakout_metrics_from_date(window, pivot_price, breakout_date):
     return metrics
 
 
-def calculate_pivot_lifecycle(window, left_high, left_high_date, bottom_idx_i, params, tracking_eligible=False):
-    """Build, freeze, break out, and fail the actionable pivot levels.
-
-    Candidate snapshots always exclude the candle being tested. Once a major
-    breakout confirms, its candidates, pivot, ATR, and buffers are frozen so
-    post-breakout highs can never move the threshold.
-    """
+def calculate_pivot_lifecycle(
+    window,
+    left_high,
+    left_high_date,
+    bottom_idx_i,
+    base_depth,
+    params,
+    tracking_eligible=False,
+):
+    """Run the single-pivot lifecycle using a valid handle or the left high."""
     latest_close = float(window["Close"].iloc[-1])
     empty_source = window.iloc[0:0]
-    latest_snapshot = calculate_pivot_candidate_snapshot(
-        empty_source, left_high, left_high_date, params
+    pre_current_snapshot = calculate_pivot_candidate_snapshot(
+        empty_source, left_high, left_high_date, base_depth, params
     )
-    pre_current_snapshot = latest_snapshot
-    frozen_major_snapshot = None
-    frozen_handle_snapshot = None
-    major_breakout_date = pd.NaT
-    handle_breakout_date = pd.NaT
-    major_breakout_atr = np.nan
+    frozen_snapshot = None
+    breakout_date = pd.NaT
+    breakout_atr = np.nan
 
     start_pos = max(int(bottom_idx_i) + 2, 1)
     for current_pos in range(start_pos, len(window)):
         source = window.iloc[int(bottom_idx_i) + 1:current_pos].copy()
-        snapshot = calculate_pivot_candidate_snapshot(source, left_high, left_high_date, params)
-        previous_close = float(window["Close"].iloc[current_pos - 1])
-        current_close = float(window["Close"].iloc[current_pos])
-        setup_atr = snapshot.get("setup_atr", np.nan)
-
-        handle_pivot = snapshot.get("handle_high_pivot", np.nan)
-        major_pivot = float(snapshot["major_pivot"])
-        merge_tolerance = float(params.get("HANDLE_MAJOR_MERGE_TOLERANCE_PCT", 0.02))
-        handle_is_distinct = bool(
-            pd.notna(handle_pivot)
-            and float(handle_pivot) < major_pivot
-            and (major_pivot - float(handle_pivot)) / major_pivot > merge_tolerance
+        snapshot = calculate_pivot_candidate_snapshot(
+            source, left_high, left_high_date, base_depth, params
         )
-        if pd.isna(handle_breakout_date) and handle_is_distinct:
-            handle_buffer = calculate_level_buffer(
-                handle_pivot,
-                setup_atr,
-                params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
-                params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
-            )
-            handle_confirmation = float(handle_pivot) + float(handle_buffer)
-            if crossed_confirmation_level(previous_close, current_close, handle_confirmation):
-                handle_breakout_date = window.index[current_pos]
-                frozen_handle_snapshot = snapshot.copy()
-
-        major_buffer = calculate_level_buffer(
-            major_pivot,
-            setup_atr,
+        selected_pivot = float(snapshot["selected_pivot"])
+        breakout_buffer = calculate_level_buffer(
+            selected_pivot,
+            snapshot.get("setup_atr", np.nan),
             params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
             params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
         )
-        major_confirmation = major_pivot + float(major_buffer)
-        if crossed_confirmation_level(previous_close, current_close, major_confirmation):
-            major_breakout_date = window.index[current_pos]
-            frozen_major_snapshot = snapshot.copy()
+        confirmation_level = selected_pivot + float(breakout_buffer)
+        if crossed_confirmation_level(
+            window["Close"].iloc[current_pos - 1],
+            window["Close"].iloc[current_pos],
+            confirmation_level,
+        ):
+            frozen_snapshot = snapshot.copy()
+            breakout_date = window.index[current_pos]
             current_atr = window.iloc[current_pos].get("atr", np.nan)
-            major_breakout_atr = float(current_atr) if pd.notna(current_atr) else setup_atr
+            breakout_atr = (
+                float(current_atr)
+                if pd.notna(current_atr)
+                else snapshot.get("setup_atr", np.nan)
+            )
             break
-
         pre_current_snapshot = snapshot
 
-    if frozen_major_snapshot is not None:
-        candidates = frozen_major_snapshot
+    if frozen_snapshot is not None:
+        selected = frozen_snapshot
     else:
         if len(window) > int(bottom_idx_i) + 1:
-            pre_current_source = window.iloc[int(bottom_idx_i) + 1:-1].copy()
-            pre_current_snapshot = calculate_pivot_candidate_snapshot(
-                pre_current_source, left_high, left_high_date, params
+            selected = calculate_pivot_candidate_snapshot(
+                window.iloc[int(bottom_idx_i) + 1:-1].copy(),
+                left_high,
+                left_high_date,
+                base_depth,
+                params,
             )
-        candidates = pre_current_snapshot
+        else:
+            selected = pre_current_snapshot
 
-    major_pivot = float(candidates["major_pivot"])
-    major_setup_atr = candidates.get("setup_atr", np.nan)
-    major_breakout_buffer = calculate_level_buffer(
-        major_pivot,
-        major_setup_atr,
+    handle_invalidated = bool(
+        pd.isna(breakout_date)
+        and selected.get("pivot_source") == "HANDLE"
+        and pd.notna(selected.get("handle_low"))
+        and latest_close < float(selected["handle_low"])
+    )
+    if handle_invalidated:
+        selected.update(
+            {
+                "selected_pivot": float(left_high),
+                "selected_pivot_date": left_high_date,
+                "pivot_source": "LEFT_HIGH",
+                "major_pivot": float(left_high),
+                "major_pivot_date": left_high_date,
+            }
+        )
+
+    selected_pivot = float(selected["selected_pivot"])
+    setup_atr = selected.get("setup_atr", np.nan)
+    breakout_buffer = calculate_level_buffer(
+        selected_pivot,
+        setup_atr,
         params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
         params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
     )
-    major_confirmation_level = major_pivot + float(major_breakout_buffer)
-    failure_atr = major_breakout_atr if pd.notna(major_breakout_atr) else major_setup_atr
-    major_failure_buffer = calculate_level_buffer(
-        major_pivot,
+    confirmation_level = selected_pivot + float(breakout_buffer)
+    left_high_buffer = calculate_level_buffer(
+        left_high,
+        setup_atr,
+        params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
+        params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
+    )
+    left_high_confirmation = float(left_high) + float(left_high_buffer)
+
+    breakout_range_pct = float(params.get("BREAKOUT_RANGE_PCT", 0.10))
+    breakout_range_low = selected_pivot * (1.0 - breakout_range_pct)
+    breakout_range_high = selected_pivot * (1.0 + breakout_range_pct)
+    success_level = max(breakout_range_high, left_high_confirmation)
+
+    failure_atr = breakout_atr if pd.notna(breakout_atr) else setup_atr
+    failure_buffer = calculate_level_buffer(
+        selected_pivot,
         failure_atr,
         params.get("FAILURE_PRICE_BUFFER_PCT", 0.01),
         params.get("FAILURE_ATR_BUFFER_MULTIPLIER", 0.25),
     )
-    major_failure_level = major_pivot - float(major_failure_buffer)
-
-    actionable_handle = (
-        frozen_handle_snapshot.get("handle_high_pivot", np.nan)
-        if frozen_handle_snapshot is not None
-        else candidates.get("handle_high_pivot", np.nan)
-    )
-    handle_setup_atr = (
-        frozen_handle_snapshot.get("setup_atr", np.nan)
-        if frozen_handle_snapshot is not None
-        else candidates.get("setup_atr", np.nan)
-    )
-    handle_buffer = calculate_level_buffer(
-        actionable_handle,
-        handle_setup_atr,
-        params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
-        params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
-    )
-    handle_confirmation_level = (
-        float(actionable_handle) + float(handle_buffer)
-        if pd.notna(actionable_handle) and pd.notna(handle_buffer)
-        else np.nan
-    )
-    handle_failure_buffer = calculate_level_buffer(
-        actionable_handle,
-        handle_setup_atr,
-        params.get("FAILURE_PRICE_BUFFER_PCT", 0.01),
-        params.get("FAILURE_ATR_BUFFER_MULTIPLIER", 0.25),
-    )
-    handle_failure_level = (
-        float(actionable_handle) - float(handle_failure_buffer)
-        if pd.notna(actionable_handle) and pd.notna(handle_failure_buffer)
-        else np.nan
-    )
+    hard_failure_level = breakout_range_low - float(failure_buffer)
 
     breakout_metrics = calculate_breakout_metrics_from_date(
-        window, major_pivot, major_breakout_date
+        window, selected_pivot, breakout_date
     )
-    distance_from_pivot_pct = (latest_close - major_pivot) / major_pivot
+    post_breakout = (
+        window.loc[breakout_date:].copy()
+        if pd.notna(breakout_date)
+        else window.iloc[0:0].copy()
+    )
+    success_rows = post_breakout[post_breakout["Close"] > success_level]
+    success_date = success_rows.index[0] if not success_rows.empty else pd.NaT
+    success_close = (
+        float(success_rows.iloc[0]["Close"])
+        if not success_rows.empty
+        else np.nan
+    )
+    breakout_success = bool(pd.notna(success_date))
+
     hard_failure = False
     persistent_failure = False
-    if pd.notna(major_breakout_date):
-        post_breakout_closes = window.loc[major_breakout_date:, "Close"]
-        hard_failure = bool(latest_close < major_failure_level)
+    if pd.notna(breakout_date):
+        post_breakout_closes = post_breakout["Close"]
+        hard_failure = bool((post_breakout_closes < hard_failure_level).any())
         persistent_failure = bool(
             len(post_breakout_closes) >= 2
-            and float(post_breakout_closes.iloc[-2]) < major_pivot
-            and float(post_breakout_closes.iloc[-1]) < major_pivot
+            and (
+                (post_breakout_closes < breakout_range_low)
+                & (post_breakout_closes.shift(1) < breakout_range_low)
+            ).any()
         )
+    failed = bool(hard_failure or persistent_failure)
+    range_breach = bool(
+        pd.notna(breakout_date)
+        and latest_close < breakout_range_low
+        and not failed
+    )
 
-    handle_failed = False
-    if pd.notna(handle_breakout_date) and pd.isna(major_breakout_date) and pd.notna(actionable_handle):
-        post_handle_closes = window.loc[handle_breakout_date:, "Close"]
-        handle_failed = bool(
-            latest_close < handle_failure_level
-            or (
-                len(post_handle_closes) >= 2
-                and float(post_handle_closes.iloc[-2]) < float(actionable_handle)
-                and float(post_handle_closes.iloc[-1]) < float(actionable_handle)
-            )
-        )
-
-    if pd.notna(major_breakout_date):
-        if hard_failure or persistent_failure:
-            lifecycle_status = "FAILED"
-        elif latest_close < major_pivot:
-            lifecycle_status = "PIVOT_RETEST_WEAK"
-        elif distance_from_pivot_pct > 0.25:
-            lifecycle_status = "EXTENDED"
-        elif latest_close <= major_confirmation_level:
-            lifecycle_status = "HOLDING_PIVOT"
-        elif (
-            pd.notna(breakout_metrics["pullback_from_post_breakout_high_pct"])
-            and breakout_metrics["pullback_from_post_breakout_high_pct"] <= -0.10
-        ):
-            lifecycle_status = "PULLBACK_TO_PIVOT"
-        else:
-            lifecycle_status = "BREAKOUT_CONFIRMED"
+    if pd.isna(breakout_date):
+        historical_phase = "FORMING"
+        current_zone = "PRE_BREAKOUT"
     else:
-        pre_major_pivot = float(pre_current_snapshot.get("major_pivot", major_pivot))
-        pre_setup_atr = pre_current_snapshot.get("setup_atr", np.nan)
-        pre_major_buffer = calculate_level_buffer(
-            pre_major_pivot,
-            pre_setup_atr,
-            params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
-            params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
-        )
-        pre_major_confirmation = pre_major_pivot + float(pre_major_buffer)
-        pre_handle = pre_current_snapshot.get("handle_high_pivot", np.nan)
-        pre_range_close = pre_current_snapshot.get("range_close_pivot", np.nan)
+        if latest_close < breakout_range_low:
+            current_zone = "BELOW_RANGE"
+        elif latest_close < selected_pivot:
+            current_zone = "RETEST_RANGE"
+        elif latest_close <= breakout_range_high:
+            current_zone = "BUY_RANGE"
+        else:
+            current_zone = "ABOVE_BUY_RANGE"
 
-        if pre_major_pivot < latest_close <= pre_major_confirmation:
-            lifecycle_status = "BREAKOUT_ATTEMPT"
-        elif pd.notna(handle_breakout_date) and not handle_failed:
-            lifecycle_status = "HANDLE_BREAKOUT_CONFIRMED"
-        elif handle_failed:
+        if failed:
+            historical_phase = "FAILED"
+        elif breakout_success:
+            historical_phase = "BREAKOUT_SUCCESS"
+        else:
+            historical_phase = "BREAKOUT_CONFIRMED"
+
+    weeks_since_breakout = breakout_metrics.get("weeks_since_breakout", np.nan)
+    breakout_stalled = bool(
+        historical_phase == "BREAKOUT_CONFIRMED"
+        and pd.notna(weeks_since_breakout)
+        and float(weeks_since_breakout) >= float(params.get("BREAKOUT_STALL_WEEKS", 10))
+    )
+    post_success_reentry = bool(
+        breakout_success
+        and not failed
+        and current_zone in {"RETEST_RANGE", "BUY_RANGE"}
+    )
+    distance_from_pivot_pct = (latest_close - selected_pivot) / selected_pivot
+
+    if failed:
+        lifecycle_status = "FAILED"
+    elif breakout_stalled:
+        lifecycle_status = "BREAKOUT_STALLED"
+    elif post_success_reentry:
+        lifecycle_status = "POST_SUCCESS_REENTRY_RANGE"
+    elif historical_phase == "BREAKOUT_SUCCESS":
+        lifecycle_status = "BREAKOUT_SUCCESS"
+    elif range_breach:
+        lifecycle_status = "BREAKOUT_RANGE_BREACH"
+    elif current_zone == "RETEST_RANGE":
+        lifecycle_status = "BREAKOUT_RETEST_RANGE"
+    elif current_zone == "BUY_RANGE":
+        lifecycle_status = "BREAKOUT_BUY_RANGE"
+    elif pd.isna(breakout_date):
+        if handle_invalidated:
             lifecycle_status = "RESETTING"
-        elif pd.notna(pre_handle):
-            pre_handle_buffer = calculate_level_buffer(
-                pre_handle,
-                pre_setup_atr,
-                params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
-                params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
-            )
-            if float(pre_handle) < latest_close <= float(pre_handle) + float(pre_handle_buffer):
-                lifecycle_status = "HANDLE_BREAKOUT_ATTEMPT"
-            elif pd.notna(pre_range_close) and latest_close > float(pre_range_close):
-                lifecycle_status = "CLOSE_RESISTANCE_CLEARED"
-            elif -0.05 <= distance_from_pivot_pct <= 0:
-                lifecycle_status = "NEAR_PIVOT"
-            elif tracking_eligible:
-                lifecycle_status = "RESETTING" if distance_from_pivot_pct < -0.15 else "TRACKING"
-            else:
-                lifecycle_status = "BASE_FORMING"
-        elif pd.notna(pre_range_close) and latest_close > float(pre_range_close):
-            lifecycle_status = "CLOSE_RESISTANCE_CLEARED"
+        elif selected.get("pivot_source") == "HANDLE":
+            lifecycle_status = "HANDLE_READY"
         elif -0.05 <= distance_from_pivot_pct <= 0:
             lifecycle_status = "NEAR_PIVOT"
         elif tracking_eligible:
             lifecycle_status = "RESETTING" if distance_from_pivot_pct < -0.15 else "TRACKING"
         else:
             lifecycle_status = "BASE_FORMING"
+    else:
+        lifecycle_status = "BREAKOUT_CONFIRMED"
 
     return {
-        **candidates,
-        "pivot_price": major_pivot,
-        "pivot_index": candidates.get("major_pivot_date", left_high_date),
+        **selected,
+        "pivot_price": selected_pivot,
+        "pivot_index": selected.get("selected_pivot_date", left_high_date),
         "distance_from_pivot_pct": float(distance_from_pivot_pct),
-        "major_breakout_buffer": float(major_breakout_buffer),
-        "major_confirmation_level": float(major_confirmation_level),
-        "major_failure_buffer": float(major_failure_buffer),
-        "major_failure_level": float(major_failure_level),
-        "handle_pivot": float(actionable_handle) if pd.notna(actionable_handle) else np.nan,
-        "handle_breakout_buffer": float(handle_buffer) if pd.notna(handle_buffer) else np.nan,
-        "handle_confirmation_level": float(handle_confirmation_level) if pd.notna(handle_confirmation_level) else np.nan,
-        "handle_failure_buffer": float(handle_failure_buffer) if pd.notna(handle_failure_buffer) else np.nan,
-        "handle_failure_level": float(handle_failure_level) if pd.notna(handle_failure_level) else np.nan,
-        "handle_breakout_date": handle_breakout_date,
-        "hard_failure": bool(hard_failure),
-        "persistent_failure": bool(persistent_failure),
-        "handle_breakout_failed": bool(handle_failed),
+        "breakout_buffer": float(breakout_buffer),
+        "confirmation_level": float(confirmation_level),
+        "left_high_confirmation_level": float(left_high_confirmation),
+        "breakout_range_pct": float(breakout_range_pct),
+        "breakout_range_low": float(breakout_range_low),
+        "breakout_range_high": float(breakout_range_high),
+        "success_level": float(success_level),
+        "failure_buffer": float(failure_buffer),
+        "hard_failure_level": float(hard_failure_level),
+        "lifecycle_phase": historical_phase,
+        # Compatibility alias for snapshots produced before lifecycle_phase.
+        "historical_phase": historical_phase,
+        "current_zone": current_zone,
+        "breakout_success": breakout_success,
+        "breakout_success_date": success_date,
+        "breakout_success_close": success_close,
+        "post_success_reentry": post_success_reentry,
+        "breakout_stalled": breakout_stalled,
+        "range_breach": range_breach,
+        "handle_invalidated": handle_invalidated,
+        "left_high_cleared": bool(latest_close > left_high_confirmation),
+        "hard_failure": hard_failure,
+        "persistent_failure": persistent_failure,
         "lifecycle_status": lifecycle_status,
+        # Compatibility aliases for existing charts/snapshots.
+        "major_breakout_buffer": float(breakout_buffer),
+        "major_confirmation_level": float(confirmation_level),
+        "major_failure_buffer": float(failure_buffer),
+        "major_failure_level": float(hard_failure_level),
         **breakout_metrics,
     }
 
@@ -1233,28 +1145,30 @@ def update_tracking_row(row, as_of_date, data_engine, params=None):
             else int(track_window["Low"].values.argmin())
         )
         left_high = float(updated.get("left_high", updated.get("left_high_pivot")))
+        base_depth = float(updated.get("Depth", updated.get("depth")))
         pivot_lifecycle = calculate_pivot_lifecycle(
             track_window,
             left_high,
             left_high_date,
             bottom_idx_i,
+            base_depth,
             params,
             tracking_eligible=True,
         )
         lifecycle_status = pivot_lifecycle["lifecycle_status"]
-        major_pivot = float(pivot_lifecycle["major_pivot"])
+        selected_pivot = float(pivot_lifecycle["selected_pivot"])
 
         updated.update(
             {
                 "latest_close": latest_close,
                 "tracking_state": "ARCHIVED" if lifecycle_status == "FAILED" else "ACTIVE",
                 "archive_reason": "confirmed_breakout_failed" if lifecycle_status == "FAILED" else pd.NA,
-                "active_pivot_price": major_pivot,
-                "active_pivot_type": "major",
-                "active_pivot_date": pivot_lifecycle.get("major_pivot_date"),
+                "active_pivot_price": selected_pivot,
+                "active_pivot_type": pivot_lifecycle.get("pivot_source"),
+                "active_pivot_date": pivot_lifecycle.get("selected_pivot_date"),
                 "active_pivot_confidence": pd.NA,
                 "active_pivot_distance_pct": float(pivot_lifecycle["distance_from_pivot_pct"]),
-                "active_pivot_reason": "frozen major pivot lifecycle",
+                "active_pivot_reason": "frozen selected pivot lifecycle",
                 **pivot_lifecycle,
             }
         )

@@ -1,448 +1,309 @@
-# Base Lifecycle Pivot and Breakout Logic
+# Base Lifecycle Pivot and Breakout Rules
 
-This is the authoritative reference for pivot construction, breakout detection,
-and breakout failure in `Streamlit/base_lifecycle_scanner.py`. Use this document
-for future discussions instead of reconstructing the rules from code.
+This document is the authoritative description of pivot selection and the
+post-breakout lifecycle used by `Streamlit/base_lifecycle_scanner.py`.
 
-The older Base Formation scanner is not covered here and is not changed by this
-logic.
+## 1. One actionable pivot
 
-## 1. Design Principles
+The scanner calculates only the values needed to select one actionable pivot:
 
-1. Calculate several raw structural values for inspection.
-2. Operate on only two actionable levels: the major pivot and a distinct handle pivot.
-3. Never allow a candle to create the pivot that it is simultaneously breaking.
-4. Freeze pivots, ATR values, and buffers when a breakout confirms.
-5. Never allow breakout or post-breakout highs to move a frozen pivot.
-6. Require a buffer above resistance for confirmation and hysteresis below resistance for failure.
-7. Use weekly closes, not weekly highs, for breakout and failure decisions.
+1. the base's left high; and
+2. a valid handle high, when a handle exists.
 
-## 2. Base Reference Points
-
-For each 26-, 52-, or 104-week scan window:
+Selection is deterministic:
 
 ```text
-left_high = highest weekly high before the final MIN_WEEKS
-base_low  = lowest weekly low from left_high onward
+valid distinct handle -> selected_pivot = handle_high
+otherwise             -> selected_pivot = left_high
 ```
 
-Pivot candidates are constructed only from weekly candles after `base_low`.
+The scanner does not calculate a range-high pivot, range-close pivot,
+resistance-cluster pivot, or ranked swing pivot.
 
-## 3. Valid Pivot Zone
+`major_pivot` and `active_pivot_price` may still appear as compatibility aliases
+in saved rows and charts. They contain the same value as `selected_pivot`; they
+are not separate calculations.
 
-A price can be a pivot for the same base only when:
+## 2. Left-high pivot
+
+`left_high_pivot` is the high at the beginning of the accepted base. It is the
+fallback pivot and remains important even when a lower handle is selected,
+because a successful breakout must eventually clear the old left-high supply.
+
+## 3. Handle detection
+
+The handle is evaluated from recent weekly bars before the signal candle. The
+signal candle is excluded so it cannot create its own pivot.
+
+Default rules:
 
 ```text
-0.85 * left_high <= candidate <= 1.05 * left_high
+lookback                     = 10 weeks
+minimum pullback             = 3%
+maximum pullback             = one third of base depth
+minimum handle duration      = 2 weeks
+valid handle-high band       = 85% to 105% of left high
+merge tolerance              = 2% of left high
 ```
 
-Defaults:
+The dynamic depth rule is:
 
 ```text
-PIVOT_MIN_LEFT_HIGH_RATIO = 0.85
-PIVOT_MAX_LEFT_HIGH_RATIO = 1.05
+handle_max_pullback_pct = base_depth / 3
+handle_pullback_pct = (handle_high - handle_low) / handle_high
 ```
 
-A price above 105% of the left high is not a new pivot. It is a possible
-breakout or post-breakout price. It does not invalidate the frozen pivot.
+Example: a 30% deep base permits at most a 10% handle pullback. A 15% deep
+base permits at most 5%.
 
-## 4. No Self-Referencing Candle
+A handle is valid only when its pullback is between the minimum and dynamic
+maximum, lasts at least two weeks, and its high is inside the allowed band
+around the left high.
 
-When candle `t` is evaluated for breakout, raw pivots are calculated only from:
+If a valid handle high is within 2% of the left high, the levels are treated as
+the same resistance area:
 
 ```text
-base_low + 1 through candle t - 1
+pivot_source   = LEFT_HIGH_HANDLE_MERGED
+selected_pivot = left_high
 ```
 
-The high or close of candle `t` cannot raise its own breakout threshold.
-
-## 5. Raw Pivot Values
-
-### 5.1 Left-high pivot
+If it is farther than 2% from the left high, the handle is distinct:
 
 ```text
-left_high_pivot = left_high
+pivot_source   = HANDLE
+selected_pivot = handle_high
 ```
 
-This is the original resistance and the fallback major pivot.
-
-### 5.2 Range-high pivot
+Without a valid handle:
 
 ```text
-range_high_pivot = highest valid weekly high after base_low and before the evaluated candle
+pivot_source   = LEFT_HIGH
+selected_pivot = left_high
 ```
 
-It is no longer a rolling eight-week value. Before breakout it expands with the
-right side of the base. At confirmed breakout it freezes.
+Before breakout, a selected handle is invalidated if the latest close falls
+below its handle low. Selection then returns to the left high.
 
-### 5.3 Range-close pivot
+## 4. Breakout confirmation
 
-```text
-range_close_pivot = highest valid weekly close over the same pre-breakout range
-```
-
-This indicates price acceptance. Clearing it is an intermediate event, not a
-confirmed major breakout.
-
-`close_high_pivot` remains temporarily as a compatibility alias for old saved
-snapshots. New logic and UI use `range_close_pivot`.
-
-### 5.4 Resistance-cluster pivot
-
-The latest 12 eligible highs are grouped using a default `+/-3%` band. The
-largest group is retained when it has at least two touches:
-
-```text
-TRACKING_CLUSTER_LOOKBACK_WEEKS = 12
-TRACKING_CLUSTER_TOLERANCE_PCT  = 0.03
-TRACKING_MIN_CLUSTER_TOUCHES    = 2
-```
-
-The cluster validates that resistance is repeated rather than a single wick.
-It is supporting evidence and is not a separate breakout threshold.
-
-### 5.5 Handle-high pivot
-
-The latest ten eligible weeks are searched for a high followed by a controlled
-pullback:
-
-```text
-3% <= handle pullback <= 18%
-```
-
-The latest valid handle is retained. It becomes separately actionable only when:
-
-```text
-handle_pivot < major_pivot
-and (major_pivot - handle_pivot) / major_pivot > 2%
-```
-
-If the two levels are within 2%, the handle is merged conceptually with the
-major pivot and does not produce a separate early-breakout signal.
-
-## 6. Actionable Levels
-
-Only two levels drive lifecycle decisions.
-
-### Major pivot
-
-```text
-major_pivot = max(left_high_pivot, range_high_pivot)
-```
-
-Because range highs are capped at 105% of the left high, the major pivot remains
-part of the same base structure.
-
-### Handle pivot
-
-```text
-handle_pivot = frozen distinct handle_high_pivot
-```
-
-The cluster and range-close values remain diagnostics. The legacy swing pivot is
-stored as `legacy_pivot_price` for comparison but does not drive breakout or failure.
-
-## 7. Breakout Buffers
-
-The setup ATR is the weekly ATR available before the candle being evaluated.
+A close must cross the buffered selected pivot:
 
 ```text
 breakout_buffer = max(
-    pivot * BREAKOUT_PRICE_BUFFER_PCT,
-    setup_atr * BREAKOUT_ATR_BUFFER_MULTIPLIER
+    0.5% * selected_pivot,
+    0.20 * setup_weekly_ATR
+)
+
+confirmation_level = selected_pivot + breakout_buffer
+
+previous_close <= confirmation_level
+current_close  >  confirmation_level
+```
+
+This correctly detects a close that moves from slightly above the raw pivot to
+above the buffered level. Comparing `previous_close` only with the raw pivot
+would miss that transition.
+
+The first qualifying crossing confirms the breakout. On that date the selected
+pivot, pivot source, left high, handle values, ATR, and confirmation buffer are
+frozen. Later highs cannot move the pivot upward.
+
+## 5. Fixed post-breakout range
+
+The selected pivot creates a fixed 20%-wide management range:
+
+```text
+breakout_range_low  = selected_pivot * 0.90
+breakout_range_high = selected_pivot * 1.10
+```
+
+Zones describe where the current close is now:
+
+```text
+BELOW_RANGE       close < range low
+RETEST_RANGE      range low <= close < selected pivot
+BUY_RANGE         selected pivot <= close <= range high
+ABOVE_BUY_RANGE   close > range high
+```
+
+`PRE_BREAKOUT` is used before a breakout is confirmed. The band is a lifecycle
+and trade-management classification, not an automatic buy recommendation.
+
+## 6. Successful breakout
+
+For a left-high pivot, success normally means clearing 10% above that pivot.
+For a lower handle pivot, merely reaching 10% above the handle may still leave
+price below the old left high. Therefore success requires the higher of:
+
+```text
+success_level = max(
+    breakout_range_high,
+    left_high + left_high_confirmation_buffer
 )
 ```
 
-Defaults:
+The first post-breakout close above `success_level` sets:
 
 ```text
-BREAKOUT_PRICE_BUFFER_PCT       = 0.005   # 0.5%
-BREAKOUT_ATR_BUFFER_MULTIPLIER  = 0.20
+breakout_success      = True
+breakout_success_date = first qualifying date
+lifecycle_phase       = BREAKOUT_SUCCESS
 ```
 
-```text
-confirmation_level = pivot + breakout_buffer
-```
+Success is latched. If price later returns to the range, the historical phase
+remains `BREAKOUT_SUCCESS`; `current_zone` reports its present location. A
+successful stock back inside `RETEST_RANGE` or `BUY_RANGE` is flagged as
+`post_success_reentry` for a possible future entry strategy.
 
-ATR and the calculated buffer freeze when breakout confirms.
+## 7. Breakout failure
 
-## 8. Major Breakout
-
-### Attempt
-
-```text
-major_pivot < current_close <= major_confirmation_level
-```
-
-Status:
-
-```text
-BREAKOUT_ATTEMPT
-```
-
-### Newly confirmed event
-
-```text
-previous_close <= major_confirmation_level
-and current_close > major_confirmation_level
-```
-
-Status:
-
-```text
-BREAKOUT_CONFIRMED
-```
-
-The comparison is against the confirmation level, not the raw pivot. Therefore,
-a previous close between the pivot and confirmation level does not prevent the
-next candle from confirming.
-
-At confirmation, these values freeze:
-
-```text
-major_pivot
-major_pivot_date
-range_high_pivot
-range_close_pivot
-resistance_cluster_pivot
-setup_atr
-major_breakout_buffer
-major_confirmation_level
-major_failure_buffer
-major_failure_level
-breakout_date
-```
-
-## 9. Handle Breakout
-
-The handle uses the same buffer formula.
-
-### Attempt
-
-```text
-handle_pivot < current_close <= handle_confirmation_level
-```
-
-Status:
-
-```text
-HANDLE_BREAKOUT_ATTEMPT
-```
-
-### Confirmed event
-
-```text
-previous_close <= handle_confirmation_level
-and current_close > handle_confirmation_level
-```
-
-Status:
-
-```text
-HANDLE_BREAKOUT_CONFIRMED
-```
-
-If one candle crosses both handle and major confirmation levels, the major
-breakout has priority.
-
-## 10. Range-Close Event
-
-When the latest close exceeds the prior range-close pivot but has not confirmed
-the major or handle breakout:
-
-```text
-CLOSE_RESISTANCE_CLEARED
-```
-
-This is a watch state. It is not a confirmed base breakout.
-
-## 11. Failure Buffers
-
-Failure uses a wider opposite-side buffer:
+The normal lower boundary is 10% below the frozen pivot. An additional ATR/pct
+buffer distinguishes a decisive failure from a marginal weekly breach:
 
 ```text
 failure_buffer = max(
-    pivot * FAILURE_PRICE_BUFFER_PCT,
-    breakout_atr * FAILURE_ATR_BUFFER_MULTIPLIER
+    1.0% * selected_pivot,
+    0.25 * frozen_setup_weekly_ATR
 )
 
-failure_level = pivot - failure_buffer
+hard_failure_level = breakout_range_low - failure_buffer
 ```
 
-Defaults:
+A confirmed breakout fails when either condition occurs:
 
 ```text
-FAILURE_PRICE_BUFFER_PCT       = 0.01   # 1%
-FAILURE_ATR_BUFFER_MULTIPLIER  = 0.25
+1. one weekly close < hard_failure_level
+2. two consecutive weekly closes < breakout_range_low
 ```
 
-This creates hysteresis:
+One close below the range low but above the hard failure level is only a range
+breach warning. It is not immediately archived. Failure is evaluated from
+closes, not intraday/week lows, to reduce noise.
+
+When failure occurs:
 
 ```text
-confirmation requires pivot + breakout buffer
-failure requires pivot - failure buffer or persistence
+lifecycle_phase  = FAILED
+lifecycle_status = FAILED
 ```
 
-## 12. Major Breakout Failure
+Tracked rows are then eligible for archival.
 
-Weekly lows do not fail a breakout. Failure is based on weekly closes.
+## 8. Stalled breakout
 
-### Holding pivot
+If a breakout has not reached the success level within 10 weeks, it is marked:
 
 ```text
-current_close >= major_pivot
+lifecycle_status = BREAKOUT_STALLED
+breakout_stalled = True
 ```
 
-When price has pulled back inside the confirmation band after already confirming:
+Stalled is not the same as failed. It remains active unless the failure rules
+are later triggered.
+
+## 9. Phase versus current zone
+
+Two fields intentionally answer different questions:
 
 ```text
-HOLDING_PIVOT
+lifecycle_phase = what has historically happened?
+current_zone    = where is price now?
 ```
 
-### Mild one-week undercut
+Phases:
 
 ```text
-major_failure_level <= current_close < major_pivot
+FORMING
+BREAKOUT_CONFIRMED
+BREAKOUT_SUCCESS
+FAILED
 ```
 
-Status:
+This separation prevents a successful stock that pulls back from being
+mistaken for a stock that never succeeded.
+
+## 10. Status priority
+
+The scanner chooses the most useful current label in this order:
 
 ```text
-PIVOT_RETEST_WEAK
+FAILED
+BREAKOUT_STALLED
+POST_SUCCESS_REENTRY_RANGE
+BREAKOUT_SUCCESS
+BREAKOUT_RANGE_BREACH
+BREAKOUT_RETEST_RANGE
+BREAKOUT_BUY_RANGE
+HANDLE_READY
+NEAR_PIVOT
+TRACKING / RESETTING / BASE_FORMING
 ```
 
-This is not immediately failed.
+`RESETTING` is used before breakout when a previously selected handle becomes
+invalid. It does not mean a confirmed breakout failed.
 
-### Hard failure
+## 11. Important output columns
 
-```text
-current_close < major_failure_level
-```
-
-One decisive weekly close is sufficient.
-
-### Persistent failure
+Keep these visible in the compact scanner table:
 
 ```text
-previous_close < major_pivot
-and current_close < major_pivot
-```
-
-Two consecutive weekly closes below the raw pivot are sufficient even when
-neither exceeds the hard-failure buffer.
-
-### Final failure condition
-
-```text
-FAILED = hard_failure or persistent_failure
-```
-
-Tracked bases with `FAILED` status are archived with reason
-`confirmed_breakout_failed`.
-
-## 13. Handle Failure
-
-Before major breakout, a confirmed handle breakout fails when:
-
-```text
-current_close < handle_failure_level
-```
-
-or:
-
-```text
-two consecutive weekly closes < handle_pivot
-```
-
-A handle failure returns the setup to `RESETTING`. It does not fail or archive
-the entire base because the major breakout never confirmed.
-
-## 14. Status Priority
-
-Major-breakout states have priority over handle states.
-
-Simplified order:
-
-```text
-BASE_FORMING / TRACKING
-    -> CLOSE_RESISTANCE_CLEARED
-    -> HANDLE_BREAKOUT_ATTEMPT
-    -> HANDLE_BREAKOUT_CONFIRMED
-    -> BREAKOUT_ATTEMPT
-    -> BREAKOUT_CONFIRMED
-    -> HOLDING_PIVOT / PIVOT_RETEST_WEAK / PULLBACK_TO_PIVOT
-    -> FAILED
-```
-
-`EXTENDED` applies when a confirmed breakout is more than 25% above its frozen
-major pivot.
-
-## 15. Operational vs Diagnostic Calculations
-
-Operational:
-
-```text
-major_pivot
-major_confirmation_level
-major_failure_level
-handle_pivot
-handle_confirmation_level
-handle_failure_level
-```
-
-Diagnostic/supporting:
-
-```text
+Symbol
+lifecycle_phase
+current_zone
+lifecycle_status
+pivot_source
+selected_pivot
+distance_from_pivot_pct
+Depth
+recovery_pct
 left_high_pivot
-range_high_pivot
-range_close_pivot
-resistance_cluster_pivot
-resistance_cluster_touches
 handle_high_pivot
-legacy_pivot_price
+handle_pullback_pct
+handle_max_pullback_pct
+breakout_range_low
+breakout_range_high
+breakout_date
+breakout_success_date
 ```
 
-The scanner intentionally does not compare price against every raw pivot after
-breakout. Once the major pivot confirms, only its frozen thresholds control its
-holding/failure state.
+Industry, metadata, and extended diagnostics belong in optional/detail views.
 
-## 16. Example
+## 12. Worked examples
+
+### Left-high pivot
 
 ```text
-left_high                  = 100.00
-range_high                 = 98.00
-major_pivot                = 100.00
-setup ATR                  = 2.00
-breakout buffer            = max(0.50, 0.40) = 0.50
-major confirmation level   = 100.50
-failure buffer             = max(1.00, 0.50) = 1.00
-major failure level        = 99.00
+left high                    = 100
+no valid handle
+selected pivot               = 100
+breakout range               = 90 to 110
+success level                = at least 110
 ```
 
-Lifecycle examples:
+### Lower handle pivot
 
 ```text
-close 100.30                         -> BREAKOUT_ATTEMPT
-previous 100.30, current 101.20      -> BREAKOUT_CONFIRMED
-later close 100.20                   -> HOLDING_PIVOT
-one later close 99.50                -> PIVOT_RETEST_WEAK
-one later close 98.80                -> FAILED (hard failure)
-two consecutive closes 99.50, 99.40 -> FAILED (persistent failure)
+left high                    = 120
+valid handle high            = 100
+selected pivot               = 100
+breakout range               = 90 to 110
+buffered left high           = approximately 120 plus its buffer
+success level                = buffered left high, not 110
 ```
 
-## 17. Parameters to Backtest Later
+The handle can provide the earlier breakout trigger, but the lifecycle does not
+declare full success until price clears the original left-high resistance.
 
-The structure is implemented, but these defaults remain tuning parameters:
+### Failed return
 
 ```text
-0.5% breakout price buffer
-0.20 ATR breakout multiplier
-1.0% failure price buffer
-0.25 ATR failure multiplier
-2.0% handle/major merge tolerance
-3.0% resistance-cluster tolerance
-3%-18% valid handle pullback
-```
+selected pivot               = 100
+range low                    = 90
+hard failure level           = 89.5 (illustrative)
 
-Change these only through scanner parameters and validate them with replay data.
-Do not change state-transition definitions merely to improve a small sample.
+one close at 89.8            = breach warning
+next close back above 90     = remains active
+two consecutive closes < 90 = failed
+one close below 89.5         = failed immediately
+```

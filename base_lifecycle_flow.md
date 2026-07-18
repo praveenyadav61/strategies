@@ -220,20 +220,18 @@ prior_uptrend = True
 
 ## 13. Pivot Detection
 
-The scanner exposes five raw values after the base low:
+The scanner uses one actionable pivot. A valid handle high is selected when it
+exists; otherwise the left high is selected. A handle may pull back no more than
+one third of the base depth and must last at least two weeks. A handle within 2%
+of the left high is merged with it and the left high remains selected.
 
 ```text
-left_high_pivot
-range_high_pivot
-range_close_pivot
-resistance_cluster_pivot
-handle_high_pivot
+valid distinct handle -> selected_pivot = handle_high_pivot
+otherwise             -> selected_pivot = left_high_pivot
 ```
 
-Raw candidates must stay between 85% and 105% of the left high. The actionable
-major pivot is `max(left_high_pivot, range_high_pivot)`. A handle is separately
-actionable only when it is more than 2% below the major pivot. The older swing
-calculation is retained only as `legacy_pivot_price` for comparison.
+Range-high, range-close, resistance-cluster, and ranked swing pivots are not
+calculated.
 
 See `base_lifecycle_pivot_breakout.md` for exact construction and freezing rules.
 
@@ -243,7 +241,7 @@ Returned columns:
 
 ```text
 distance_from_left_high_pct = (latest_close - left_high) / left_high
-distance_from_pivot_pct    = (latest_close - major_pivot) / major_pivot
+distance_from_pivot_pct    = (latest_close - selected_pivot) / selected_pivot
 ```
 
 Examples:
@@ -266,7 +264,8 @@ current_close > confirmation_level
 ```
 
 The evaluated candle is excluded from its own pivot calculation. At confirmation,
-the major pivot, candidates, setup ATR, buffers, and breakout date freeze.
+the selected pivot, setup ATR, buffers, and breakout date freeze. The management
+range is then fixed at 10% below to 10% above the pivot.
 
 Returned metrics:
 
@@ -292,29 +291,34 @@ breakout_volume_ratio = breakout_week_volume / 10-week volume MA
 Pre-breakout progression includes:
 
 ```text
-BASE_FORMING / TRACKING
-CLOSE_RESISTANCE_CLEARED
-HANDLE_BREAKOUT_ATTEMPT
-HANDLE_BREAKOUT_CONFIRMED
-BREAKOUT_ATTEMPT
-BREAKOUT_CONFIRMED
+BASE_FORMING
+TRACKING
+NEAR_PIVOT
+HANDLE_READY
 ```
 
-Post-breakout holding/failure states include:
+Post-breakout states include:
 
 ```text
-HOLDING_PIVOT
-PIVOT_RETEST_WEAK
-PULLBACK_TO_PIVOT
-EXTENDED
+BREAKOUT_BUY_RANGE
+BREAKOUT_RETEST_RANGE
+BREAKOUT_RANGE_BREACH
+BREAKOUT_SUCCESS
+POST_SUCCESS_REENTRY_RANGE
+BREAKOUT_STALLED
 FAILED
 ```
 
-One close below the frozen failure level or two consecutive closes below the raw
-major pivot produces `FAILED`. Exact status priority is documented in
+One close below the buffered hard-failure level, or two consecutive closes
+below the 10%-lower boundary, produces `FAILED`. Exact status priority is documented in
 `base_lifecycle_pivot_breakout.md`.
 
-## 17. Score
+## 17. Internal Base-Window Score
+
+There is no pivot-candidate scoring or user-facing lifecycle rank. Pivot
+selection is rule-based: valid handle, otherwise left high. The existing base
+structure score below is retained internally only to deduplicate a stock that
+qualifies in multiple scan windows; it is hidden from the compact lifecycle UI.
 
 Max score is capped at `100`.
 
@@ -372,14 +376,18 @@ All Window Results
 So `All Window Results` can contain the same stock multiple times, one row per
 valid scan window.
 
-## 19. Ranking
+## 19. Legacy Saved Rank
 
-Final candidate table:
+Saved snapshots may still contain a rank derived from the internal base-window
+score for backward compatibility:
 
 ```text
 sort by score descending
 rank = 1, 2, 3...
 ```
+
+Rank and score are not shown in the compact lifecycle table and do not select
+the handle or left-high pivot.
 
 ## 20. Weekly Snapshot Comparison
 
@@ -573,25 +581,19 @@ tracking date. Once a breakout is found, the actionable levels remain frozen:
 
 ```text
 left_high_pivot
-range_high_pivot
-range_close_pivot
-resistance_cluster_pivot
 handle_high_pivot
-major_pivot
-major_confirmation_level
-major_failure_level
-handle_pivot
-handle_confirmation_level
-handle_failure_level
-active_pivot_price
-active_pivot_type
-active_pivot_reason
+selected_pivot
+confirmation_level
+breakout_range_low
+breakout_range_high
+hard_failure_level
+success_level
 ```
 
-`active_pivot_price` is now a compatibility/display alias for `major_pivot`.
-The old ranked active-pivot selector is not used by lifecycle or failure logic.
-Tracked bases archive only after a confirmed major breakout fails; a failed
-handle breakout returns to `RESETTING` instead.
+`major_pivot` and `active_pivot_price`, where present in older saved data or
+charts, are compatibility aliases for `selected_pivot`. Tracked bases archive
+only after a confirmed breakout fails. A handle invalidated before confirmation
+returns selection to the left high and reports `RESETTING`.
 
 Base Phase prior-uptrend now uses a variable lookback based on the selected base
 window:
@@ -630,15 +632,13 @@ Tracking/status labels used by the lifecycle engine:
 BASE_FORMING
 TRACKING
 NEAR_PIVOT
-CLOSE_RESISTANCE_CLEARED
-HANDLE_BREAKOUT_ATTEMPT
-HANDLE_BREAKOUT_CONFIRMED
-BREAKOUT_ATTEMPT
-BREAKOUT_CONFIRMED
-HOLDING_PIVOT
-PIVOT_RETEST_WEAK
-EXTENDED
-PULLBACK_TO_PIVOT
+HANDLE_READY
+BREAKOUT_BUY_RANGE
+BREAKOUT_RETEST_RANGE
+BREAKOUT_RANGE_BREACH
+BREAKOUT_SUCCESS
+POST_SUCCESS_REENTRY_RANGE
+BREAKOUT_STALLED
 FAILED
 RESETTING
 ```
