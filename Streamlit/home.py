@@ -1,4 +1,6 @@
 import streamlit as st
+st.set_page_config(page_title="Strategies Dashboard", layout="wide")
+
 import pandas as pd
 import os
 import sys
@@ -393,7 +395,6 @@ def load_daily_price_data(symbol):
     raise FileNotFoundError(f"Could not find daily data for {symbol}")
 
 
-# st.set_page_config(layout="wide")
 ## data read
 # Load shared data once through cached helpers so all tabs reuse it.
 static_df = load_static_data()

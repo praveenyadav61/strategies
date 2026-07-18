@@ -39,6 +39,17 @@ def render_lifecycle_control_styles():
     st.markdown(
         """
         <style>
+        /* Use nearly all available screen width on lifecycle pages. */
+        [data-testid="stMainBlockContainer"] {
+            max-width: 94vw !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+            padding-left: 1.5rem !important;
+            padding-right: 1.5rem !important;
+        }
+        [data-testid="stDataFrame"] {
+            width: 100% !important;
+        }
         /* Neutral compact pills for selected multiselect values. */
         [data-baseweb="select"] [data-baseweb="tag"] {
             background-color: var(--secondary-background-color) !important;
@@ -73,6 +84,13 @@ def render_lifecycle_control_styles():
         li[role="option"][aria-selected="true"] svg {
             color: var(--text-color) !important;
             fill: currentColor !important;
+        }
+        @media (max-width: 900px) {
+            [data-testid="stMainBlockContainer"] {
+                max-width: 100% !important;
+                padding-left: 0.75rem !important;
+                padding-right: 0.75rem !important;
+            }
         }
         </style>
         """,
@@ -380,6 +398,17 @@ def selectable_table_columns(df, key, default_columns=None, label="Table columns
     return selected or (["Symbol"] if "Symbol" in available_columns else available_columns[:1])
 
 
+def compact_table_column_config(columns):
+    """Keep dynamic lifecycle columns narrow so more fit on wide screens."""
+    return {
+        column: st.column_config.Column(
+            label=column.replace("_", " ").title(),
+            width="small",
+        )
+        for column in columns
+    }
+
+
 def lifecycle_selected_detail_frame(row, columns):
     details = []
     for column in columns:
@@ -444,7 +473,7 @@ def render_lifecycle_selected_details(selected_row):
     if company_df.empty and diagnostics_df.empty:
         return
 
-    with st.expander("Selected stock details", expanded=True):
+    with st.expander("Selected stock details", expanded=False):
         company_col, diagnostics_col = st.columns(2)
         with company_col:
             st.caption("Company and review tags")
@@ -493,6 +522,7 @@ def render_lifecycle_table_with_chart(display_df, key_prefix, source_df=None):
         table_df,
         use_container_width=True,
         hide_index=True,
+        column_config=compact_table_column_config(selected_columns),
         on_select="rerun",
         selection_mode="single-row",
         key=f"{key_prefix}_table",
@@ -502,7 +532,6 @@ def render_lifecycle_table_with_chart(display_df, key_prefix, source_df=None):
         selected_row = review_df.iloc[event.selection.rows[0]]
         selected_symbol = selected_row["Symbol"]
         st.subheader(f"Chart for {selected_symbol}")
-        render_lifecycle_selected_details(selected_row)
         try:
             result_row = selected_row.to_dict()
             fig = render_lifecycle_chart_for_symbol(
@@ -515,6 +544,7 @@ def render_lifecycle_table_with_chart(display_df, key_prefix, source_df=None):
             st.error(f"Could not find data file for {selected_symbol}.")
         except Exception as e:
             st.error(f"An error occurred while plotting {selected_symbol}: {e}")
+        render_lifecycle_selected_details(selected_row)
 
 
 def stage_labels():
@@ -595,6 +625,7 @@ def render_review_funnel(stage_results, lifecycle_df):
             stage_display_df,
             use_container_width=True,
             hide_index=True,
+            column_config=compact_table_column_config(stage_cols),
             on_select="rerun",
             selection_mode="single-row",
             key="lifecycle_review_funnel_table",
@@ -665,7 +696,7 @@ def render_base_phase_page(static_df, m_cap):
             default=sorted(lifecycle_df["scan_window_weeks"].dropna().unique()),
         )
     with filter_col3:
-        require_pivot = st.checkbox("Pivot detected only", value=False)
+        require_pivot = st.checkbox("Pivot detected only", value=True)
 
     display_df = lifecycle_df.copy()
     if selected_statuses:
@@ -703,6 +734,7 @@ def render_base_phase_page(static_df, m_cap):
                 sorted_all_windows_df[all_window_columns],
                 use_container_width=True,
                 hide_index=True,
+                column_config=compact_table_column_config(all_window_columns),
             )
 
 
@@ -715,6 +747,38 @@ def render_tracking_phase_page(static_df, m_cap):
     active_tracking_df = tracking_state.get("active", pd.DataFrame())
     history_tracking_df = tracking_state.get("history", pd.DataFrame())
     archived_tracking_df = tracking_state.get("archived", pd.DataFrame())
+
+    available_windows = sorted(
+        {
+            int(window)
+            for frame in [active_tracking_df, history_tracking_df, archived_tracking_df]
+            if "scan_window_weeks" in frame.columns
+            for window in pd.to_numeric(
+                frame["scan_window_weeks"], errors="coerce"
+            ).dropna().unique()
+        }
+    )
+    selected_windows = st.multiselect(
+        "Base Window",
+        options=available_windows,
+        default=available_windows,
+        key="tracking_base_windows",
+        help="Filter Active, History, and Archived tracking rows by the original base window.",
+    )
+
+    def filter_tracking_windows(frame):
+        if (
+            frame.empty
+            or not selected_windows
+            or "scan_window_weeks" not in frame.columns
+        ):
+            return frame
+        numeric_windows = pd.to_numeric(frame["scan_window_weeks"], errors="coerce")
+        return frame[numeric_windows.isin(selected_windows)].copy()
+
+    active_tracking_df = filter_tracking_windows(active_tracking_df)
+    history_tracking_df = filter_tracking_windows(history_tracking_df)
+    archived_tracking_df = filter_tracking_windows(archived_tracking_df)
 
     metric_cols = st.columns(3)
     metric_cols[0].metric("Active Bases", len(active_tracking_df))
