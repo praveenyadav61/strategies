@@ -309,6 +309,12 @@ class LayeredPriceChart:
         return self.fig
 
 
+def _coerce_chart_date(value):
+    if value is None or pd.isna(value):
+        return None
+    return pd.to_datetime(value)
+
+
 class LayeredCupChart(LayeredPriceChart):
     """Cup-specific chart builder that keeps the cup annotation helpers together."""
 
@@ -324,7 +330,63 @@ class LayeredCupChart(LayeredPriceChart):
         df = prepare_weekly_chart_data(df_weekly, self.params, symbol)
         super().__init__(df, symbol, rows=4, row_heights=row_heights, vertical_spacing=vertical_spacing)
 
-    def add_peak_low_markers(self, row=1, col=1):
+    def _nearest_index(self, value):
+        date_value = _coerce_chart_date(value)
+        if date_value is None or self.df.empty:
+            return None
+        if date_value in self.df.index:
+            return date_value
+        nearest_pos = self.df.index.get_indexer([date_value], method="nearest")
+        if len(nearest_pos) == 0 or nearest_pos[0] < 0:
+            return None
+        return self.df.index[int(nearest_pos[0])]
+
+    def _row_value(self, date_value, preferred_value, column, fallback="max"):
+        if preferred_value is not None and not pd.isna(preferred_value):
+            return float(preferred_value)
+        nearest_date = self._nearest_index(date_value)
+        if nearest_date is None or column not in self.df.columns:
+            return None
+        if fallback == "min":
+            return float(self.df.loc[nearest_date, column])
+        return float(self.df.loc[nearest_date, column])
+
+    def _add_price_marker(
+        self,
+        date_value,
+        price_value,
+        label,
+        color,
+        symbol,
+        row=1,
+        col=1,
+        textposition="top center",
+    ):
+        marker_date = self._nearest_index(date_value)
+        if marker_date is None or price_value is None or pd.isna(price_value):
+            return self
+
+        self.fig.add_trace(
+            go.Scatter(
+                x=[marker_date],
+                y=[float(price_value)],
+                mode="markers+text",
+                name=label,
+                text=[label],
+                textposition=textposition,
+                marker=dict(color=color, size=12, symbol=symbol, line=dict(width=1, color="white")),
+            ),
+            row=row,
+            col=col,
+        )
+        return self
+
+    def add_peak_low_markers(self, row=1, col=1, result_row=None):
+        if result_row is not None and (
+            "left_high_index" in result_row or "base_low_index" in result_row
+        ):
+            return self.add_base_lifecycle_markers(result_row, row=row, col=col)
+
         points = get_cup_reference_points(self.df, self.params)
         if not points:
             return self
@@ -358,6 +420,83 @@ class LayeredCupChart(LayeredPriceChart):
             row=row,
             col=col,
         )
+        return self
+
+    def add_base_lifecycle_markers(self, result_row, row=1, col=1):
+        if result_row is None:
+            return self
+
+        left_high_date = result_row.get("left_high_index", result_row.get("peak_idx"))
+        left_high_price = result_row.get("left_high", result_row.get("peak_price"))
+        bottom_date = result_row.get("base_low_index", result_row.get("bottom_idx"))
+        bottom_price = result_row.get("base_low", result_row.get("bottom_price"))
+        pivot_date = result_row.get("pivot_index")
+        pivot_price = result_row.get("pivot_price", result_row.get("pivot"))
+        breakout_date = result_row.get("breakout_date")
+        breakout_close = result_row.get("breakout_close")
+
+        left_high_price = self._row_value(left_high_date, left_high_price, "High")
+        bottom_price = self._row_value(bottom_date, bottom_price, "Low", fallback="min")
+        pivot_price = self._row_value(pivot_date, pivot_price, "High")
+        breakout_close = self._row_value(breakout_date, breakout_close, "Close")
+
+        self._add_price_marker(
+            left_high_date,
+            left_high_price,
+            "Left High",
+            "#dc2626",
+            "triangle-down",
+            row=row,
+            col=col,
+            textposition="top center",
+        )
+        self._add_price_marker(
+            bottom_date,
+            bottom_price,
+            "Bottom",
+            "#16a34a",
+            "triangle-up",
+            row=row,
+            col=col,
+            textposition="bottom center",
+        )
+
+        pivot_marker_date = self._nearest_index(pivot_date)
+        if pivot_marker_date is not None and pivot_price is not None and not pd.isna(pivot_price):
+            pivot_detected = bool(result_row.get("pivot_detected", True))
+            pivot_label = "Pivot" if pivot_detected else "Pivot Fallback"
+            self.fig.add_shape(
+                type="line",
+                x0=pivot_marker_date,
+                y0=float(pivot_price),
+                x1=self.df.index[-1],
+                y1=float(pivot_price),
+                line=dict(color="#f59e0b", width=2, dash="dot" if pivot_detected else "dash"),
+                row=row,
+                col=col,
+            )
+            self._add_price_marker(
+                pivot_marker_date,
+                pivot_price,
+                pivot_label,
+                "#f59e0b",
+                "diamond",
+                row=row,
+                col=col,
+                textposition="bottom center",
+            )
+
+        self._add_price_marker(
+            breakout_date,
+            breakout_close,
+            "Breakout",
+            "#2563eb",
+            "star",
+            row=row,
+            col=col,
+            textposition="top center",
+        )
+
         return self
 
     def add_tight_close_blocks(
@@ -418,11 +557,11 @@ class LayeredCupChart(LayeredPriceChart):
         if result_row is None or 'pivot_index' not in result_row:
             return self
     
-        pivot_date = result_row['pivot_index']
+        pivot_date = self._nearest_index(result_row['pivot_index'])
         pivot_price = result_row['pivot_price']
     
         # Check if pivot_date exists in the dataframe index
-        if pivot_date not in self.df.index:
+        if pivot_date is None:
             return self
     
         self.fig.add_trace(
@@ -463,13 +602,14 @@ class LayeredCupChart(LayeredPriceChart):
 
 def plot_cup_formation(df_weekly, symbol, params, result_row=None):
     chart = LayeredCupChart(df_weekly, symbol, params)
+    chart.add_candles().add_price_moving_averages().add_peak_low_markers(result_row=result_row)
+    chart.add_tight_close_blocks()
+    if result_row is not None and not (
+        "left_high_index" in result_row or "base_low_index" in result_row
+    ):
+        chart.add_pivot_marker(result_row)
     return (
         chart
-        .add_candles()
-        .add_price_moving_averages()
-        .add_peak_low_markers()
-        .add_tight_close_blocks()
-        .add_pivot_marker(result_row)  # This will now use the passed result_row
         .add_volume_bars()
         .add_volume_moving_averages()
         .add_rsi()

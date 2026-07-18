@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from modular_base_scanner import CupScanner
+from base_lifecycle_pages import render_base_phase_page, render_tracking_phase_page
 from chart_plot import plot_cup_formation, plot_custom_ohlcv_chart, plot_trend_follower_chart
 from trend_follower.final_trend_follower import EMAScanner
 from audio import build_transcript_pdf, load_saved_records, process_audio_request
@@ -362,10 +363,19 @@ def get_column_options(df, column_name):
 
 def load_daily_price_data(symbol):
     """Load a daily parquet file and normalize the date index."""
+    symbol = str(symbol).strip()
+    candidate_symbols = [symbol]
+    if not symbol.endswith(".NS"):
+        candidate_symbols.append(f"{symbol}.NS")
+
     data_candidates = [
-        ROOT_DIR / "data" / "daily" / f"{symbol}.parquet",
-        Path("data/daily") / f"{symbol}.parquet",
-        Path("../data/daily") / f"{symbol}.parquet",
+        path
+        for candidate_symbol in candidate_symbols
+        for path in [
+            ROOT_DIR / "data" / "daily" / f"{candidate_symbol}.parquet",
+            Path("data/daily") / f"{candidate_symbol}.parquet",
+            Path("../data/daily") / f"{candidate_symbol}.parquet",
+        ]
     ]
 
     for path in data_candidates:
@@ -382,6 +392,7 @@ def load_daily_price_data(symbol):
 
     raise FileNotFoundError(f"Could not find daily data for {symbol}")
 
+
 # st.set_page_config(layout="wide")
 ## data read
 # Load shared data once through cached helpers so all tabs reuse it.
@@ -393,7 +404,18 @@ announcements_df = load_announcements_data()
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Choose a page",
-    ["Home", "Base Formation", "Announcements", "Earnings Summary", "Bulk_Block_Deal", "Trend_Follower", "Custom Data Center", "Audio Transcript"],
+    [
+        "Home",
+        "Base Formation",
+        "Base Phase",
+        "Tracking Phase",
+        "Announcements",
+        "Earnings Summary",
+        "Bulk_Block_Deal",
+        "Trend_Follower",
+        "Custom Data Center",
+        "Audio Transcript",
+    ],
 )
 m_cap =st.sidebar.number_input("Market Cap Filter (in Crores)", min_value=10, value=1000, step=1000000000)
 if page == "Home":
@@ -586,6 +608,12 @@ elif page == "Base Formation":
                     st.error(f"Could not find data file for {selected_symbol}.")
                 except Exception as e:
                     st.error(f"An error occurred while plotting {selected_symbol}: {e}")
+
+elif page == "Tracking Phase":
+    render_tracking_phase_page(static_df, m_cap)
+
+elif page == "Base Phase":
+    render_base_phase_page(static_df, m_cap)
 
 elif page == "Announcements":
     st.title("Announcements")

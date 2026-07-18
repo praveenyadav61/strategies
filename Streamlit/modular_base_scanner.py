@@ -16,7 +16,7 @@ from data_layer.data_engine import DataEngine
 # ---------------- CONFIG ----------------
 data_path = '../data/daily/'
 if not os.path.exists(data_path):
-    data_path = 'data/test_data/'
+    data_path = 'data/daily/'
 
 ATH_THRESHOLD = 0.8
 DEFAULT_PARAMS = {
