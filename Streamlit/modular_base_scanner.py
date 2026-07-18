@@ -22,10 +22,10 @@ ATH_THRESHOLD = 0.8
 DEFAULT_PARAMS = {
     'MIN_WEEKS': 8,
     'MAX_WEEKS': 52,
+    'MIN_WEEKLY_BARS_REQUIRED': 10,
     'MIN_DEPTH': 0.15,
-    'MAX_DEPTH': 0.50,
-    'RECOVERY_MIN': 0.40,
-    'RECOVERY_MAX': 1.20,
+    'MAX_DEPTH': 0.60,
+    'RECOVERY_MIN': 0.60,
     'ATR_WINDOW': 14,
     'COMPRESSION_LOOKBACK': 10,
 }
@@ -46,7 +46,7 @@ class ScanStats:
         self.ath_filtered = []
         self.min_depth = []
         self.duration = []
-        self.near_high = []
+        self.recovery = []
         self.prior_uptrend = []
 # ---------------- INDICATORS ----------------
 def calculate_cup_metrics(df, params):
@@ -71,19 +71,17 @@ def calculate_cup_metrics(df, params):
     return df
 
 # ---------------- HELPERS ----------------
-def has_prior_uptrend(df, base_start_idx, left_high, bottom_price):
+def calculate_prior_uptrend_pct(df, base_start_idx, left_high):
     window = df.iloc[max(0, base_start_idx - 12):base_start_idx]
 
     if len(window) < 2:
-        return False
-
-    depth_pct = (left_high - bottom_price) / left_high
-    min_return = max(0.25, 1.5 * depth_pct)
+        return float("nan")
 
     start_price = window["Low"].min()
-    ret = (left_high - start_price) / start_price
+    if start_price <= 0:
+        return float("nan")
 
-    return ret >= min_return
+    return (left_high - start_price) / start_price
 
 def find_pivot(df, peak_idx, left_high, bottom_idx, bottom_price,
                logger=None, symbol=None):
@@ -167,7 +165,8 @@ def find_pivot1(df, peak_idx, left_high, bottom_idx, bottom_price, logger=None, 
 # ---------------- CORE LOGIC ----------------
 def check_cup_conditions(df, params, symbol, stats, logger, ath):
     try:
-        window = df[-params['MAX_WEEKS']:]
+        max_weeks = params.get('MAX_WEEKS')
+        window = df.tail(max_weeks).copy() if max_weeks else df.copy()
 
         peak_idx = window.iloc[:-params['MIN_WEEKS']]['High'].idxmax()
         peak_price = window.loc[peak_idx, 'High']
@@ -196,10 +195,10 @@ def check_cup_conditions(df, params, symbol, stats, logger, ath):
         stats.duration.append(symbol)
 
         # Recovery
-        recovery = (window['Close'].iloc[-1] - bottom_price) / (peak_price - bottom_price)
-        if not (params['RECOVERY_MIN'] <= recovery <= params['RECOVERY_MAX']):
+        recovery_pct = (window['Close'].iloc[-1] - bottom_price) / (peak_price - bottom_price)
+        if recovery_pct < params['RECOVERY_MIN']:
             return None
-        stats.near_high.append(symbol)
+        stats.recovery.append(symbol)
 
         # Compression (ATR based)
         atr = window['atr']
@@ -214,7 +213,9 @@ def check_cup_conditions(df, params, symbol, stats, logger, ath):
         bottom_idx_i = window.index.get_loc(bottom_idx)
         peak_idx_i = window.index.get_loc(peak_idx)
 
-        prior_uptrend = has_prior_uptrend(df, peak_idx_i, peak_price, bottom_price)
+        prior_uptrend_pct = calculate_prior_uptrend_pct(df, peak_idx_i, peak_price)
+        min_prior_uptrend_pct = max(0.25, 1.5 * depth)
+        prior_uptrend = pd.notna(prior_uptrend_pct) and prior_uptrend_pct >= min_prior_uptrend_pct
         if prior_uptrend:
             stats.prior_uptrend.append(symbol)
 
@@ -228,10 +229,12 @@ def check_cup_conditions(df, params, symbol, stats, logger, ath):
         return {
             "Symbol": symbol,
             "Depth": float(depth),
-            "Recovery": float(recovery),
+            "recovery_pct": float(recovery_pct),
             "Tight Groups": tight_groups,   # ✅ restored
             "compression": bool(compression),
             "prior_uptrend": bool(prior_uptrend),
+            "prior_uptrend_pct": float(prior_uptrend_pct),
+            "min_prior_uptrend_pct": float(min_prior_uptrend_pct),
             "pivot_price": float(pivot),
             "pivot_index": pivot_index_label,
             "pivot_index_pos": int(pivot_idx_i),
@@ -282,7 +285,12 @@ class CupScanner:
                 'Close': 'last',
                 'Volume': 'sum'
             }).dropna()
-            if len(weekly) < self.params['MAX_WEEKS']:
+            min_weekly_bars_required = self.params.get(
+                'MIN_WEEKLY_BARS_REQUIRED',
+                self.params['MIN_WEEKS'] + 2,
+            )
+            if len(weekly) < min_weekly_bars_required:
+                self.logger.debug(f"{symbol} - Not enough weekly data: {len(weekly)} weeks")
                 return None
 
             weekly = calculate_cup_metrics(weekly, self.params)
@@ -327,17 +335,17 @@ if __name__ == "__main__":
     # print("Total Found:", len(df))
     # print(df.head(20))
 
-    # print("\n===== STATS =====")
-    # print("DMA filtered:", len(scanner.stats.dma_filtered))
-    # print("ATH filtered:", len(scanner.stats.ath_filtered))
-    # print("Min depth:", len(scanner.stats.min_depth))
-    # print("Duration:", len(scanner.stats.duration))
-    # print("Near high:", len(scanner.stats.near_high))
-    # print("Prior uptrend:", len(scanner.stats.prior_uptrend))
+    print("\n===== STATS =====")
+    print("DMA filtered:", len(scanner.stats.dma_filtered))
+    print("ATH filtered:", len(scanner.stats.ath_filtered))
+    print("Min depth:", len(scanner.stats.min_depth))
+    print("Duration:", len(scanner.stats.duration))
+    print("Recovery:", len(scanner.stats.recovery))
+    print("Prior uptrend:", len(scanner.stats.prior_uptrend))
 
     # print("\all level stocks : ")
-    # print("DMA Filtered:", scanner.stats.dma_filtered)
-    # print("ATH Filtered:", scanner.stats.ath_filtered)
-    # print("Min Depth:", scanner.stats.min_depth)
-    # print("Duration:", scanner.stats.duration)
-    # print("Near High:", scanner.stats.near_high)
+    print("DMA Filtered:", scanner.stats.dma_filtered)
+    print("ATH Filtered:", scanner.stats.ath_filtered)
+    print("Min Depth:", scanner.stats.min_depth)
+    print("Duration:", scanner.stats.duration)
+    print("Recovery:", scanner.stats.recovery)

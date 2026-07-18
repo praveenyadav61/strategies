@@ -8,10 +8,10 @@ from base_formation import calculate_cup_metrics, get_tight_close_groups
 default_params = {
     "MIN_WEEKS": 8,
     "MAX_WEEKS": 52,
+    "MIN_WEEKLY_BARS_REQUIRED": 10,
     "MIN_DEPTH": 15 / 100.0,
     "MAX_DEPTH": 60 / 100.0,
     "RECOVERY_MIN": 60 / 100.0,
-    "RECOVERY_MAX": 120 / 100.0,
     "ATR_WINDOW": 14,
     "COMPRESSION_LOOKBACK": 10,
 }
@@ -43,13 +43,13 @@ def get_cup_reference_points(df, params):
     Returning plain values keeps the plotting methods simple and makes the
     annotation layer optional.
     """
-    max_weeks = params["MAX_WEEKS"]
     min_weeks = params["MIN_WEEKS"]
+    max_weeks = params.get("MAX_WEEKS")
 
-    if len(df) < max_weeks:
+    if len(df) < min_weeks + 2:
         return None
 
-    window = df.iloc[-max_weeks:].copy()
+    window = df.tail(max_weeks).copy() if max_weeks else df.copy()
     peak_search_window = window.iloc[:-min_weeks]
     if peak_search_window.empty:
         return None
@@ -309,6 +309,12 @@ class LayeredPriceChart:
         return self.fig
 
 
+def _coerce_chart_date(value):
+    if value is None or pd.isna(value):
+        return None
+    return pd.to_datetime(value)
+
+
 class LayeredCupChart(LayeredPriceChart):
     """Cup-specific chart builder that keeps the cup annotation helpers together."""
 
@@ -324,7 +330,63 @@ class LayeredCupChart(LayeredPriceChart):
         df = prepare_weekly_chart_data(df_weekly, self.params, symbol)
         super().__init__(df, symbol, rows=4, row_heights=row_heights, vertical_spacing=vertical_spacing)
 
-    def add_peak_low_markers(self, row=1, col=1):
+    def _nearest_index(self, value):
+        date_value = _coerce_chart_date(value)
+        if date_value is None or self.df.empty:
+            return None
+        if date_value in self.df.index:
+            return date_value
+        nearest_pos = self.df.index.get_indexer([date_value], method="nearest")
+        if len(nearest_pos) == 0 or nearest_pos[0] < 0:
+            return None
+        return self.df.index[int(nearest_pos[0])]
+
+    def _row_value(self, date_value, preferred_value, column, fallback="max"):
+        if preferred_value is not None and not pd.isna(preferred_value):
+            return float(preferred_value)
+        nearest_date = self._nearest_index(date_value)
+        if nearest_date is None or column not in self.df.columns:
+            return None
+        if fallback == "min":
+            return float(self.df.loc[nearest_date, column])
+        return float(self.df.loc[nearest_date, column])
+
+    def _add_price_marker(
+        self,
+        date_value,
+        price_value,
+        label,
+        color,
+        symbol,
+        row=1,
+        col=1,
+        textposition="top center",
+    ):
+        marker_date = self._nearest_index(date_value)
+        if marker_date is None or price_value is None or pd.isna(price_value):
+            return self
+
+        self.fig.add_trace(
+            go.Scatter(
+                x=[marker_date],
+                y=[float(price_value)],
+                mode="markers+text",
+                name=label,
+                text=[label],
+                textposition=textposition,
+                marker=dict(color=color, size=12, symbol=symbol, line=dict(width=1, color="white")),
+            ),
+            row=row,
+            col=col,
+        )
+        return self
+
+    def add_peak_low_markers(self, row=1, col=1, result_row=None):
+        if result_row is not None and (
+            "left_high_index" in result_row or "base_low_index" in result_row
+        ):
+            return self.add_base_lifecycle_markers(result_row, row=row, col=col)
+
         points = get_cup_reference_points(self.df, self.params)
         if not points:
             return self
@@ -358,6 +420,116 @@ class LayeredCupChart(LayeredPriceChart):
             row=row,
             col=col,
         )
+        return self
+
+    def add_base_lifecycle_markers(self, result_row, row=1, col=1):
+        if result_row is None:
+            return self
+
+        left_high_date = result_row.get("left_high_index", result_row.get("peak_idx"))
+        left_high_price = result_row.get("left_high", result_row.get("peak_price"))
+        bottom_date = result_row.get("base_low_index", result_row.get("bottom_idx"))
+        bottom_price = result_row.get("base_low", result_row.get("bottom_price"))
+        pivot_date = result_row.get("selected_pivot_date", result_row.get("pivot_index"))
+        pivot_price = result_row.get(
+            "selected_pivot",
+            result_row.get("pivot_price", result_row.get("pivot")),
+        )
+        breakout_range_low = result_row.get("breakout_range_low")
+        breakout_range_high = result_row.get("breakout_range_high")
+        breakout_range_pct = result_row.get("breakout_range_pct", 0.10)
+        breakout_date = result_row.get("breakout_date")
+        breakout_close = result_row.get("breakout_close")
+
+        left_high_price = self._row_value(left_high_date, left_high_price, "High")
+        bottom_price = self._row_value(bottom_date, bottom_price, "Low", fallback="min")
+        pivot_price = self._row_value(pivot_date, pivot_price, "High")
+        breakout_close = self._row_value(breakout_date, breakout_close, "Close")
+
+        self._add_price_marker(
+            left_high_date,
+            left_high_price,
+            "Left High",
+            "#dc2626",
+            "triangle-down",
+            row=row,
+            col=col,
+            textposition="top center",
+        )
+        self._add_price_marker(
+            bottom_date,
+            bottom_price,
+            "Bottom",
+            "#16a34a",
+            "triangle-up",
+            row=row,
+            col=col,
+            textposition="bottom center",
+        )
+
+        pivot_marker_date = self._nearest_index(pivot_date)
+        if pivot_marker_date is not None and pivot_price is not None and not pd.isna(pivot_price):
+            pivot_source = result_row.get("pivot_source")
+            pivot_label = {
+                "HANDLE": "Handle Pivot",
+                "LEFT_HIGH": "Left-High Pivot",
+                "LEFT_HIGH_HANDLE_MERGED": "Merged Pivot",
+            }.get(pivot_source, "Pivot")
+            self.fig.add_hline(
+                y=float(pivot_price),
+                line_color="#f59e0b",
+                line_width=1,
+                line_dash="solid",
+                annotation_text=f"Pivot {float(pivot_price):.2f}",
+                annotation_position="top right",
+                row=row,
+                col=col,
+            )
+            self._add_price_marker(
+                pivot_marker_date,
+                pivot_price,
+                pivot_label,
+                "#f59e0b",
+                "diamond",
+                row=row,
+                col=col,
+                textposition="bottom center",
+            )
+
+        range_pct_label = (
+            f"{float(breakout_range_pct) * 100:g}%"
+            if breakout_range_pct is not None and not pd.isna(breakout_range_pct)
+            else "10%"
+        )
+        lifecycle_range_levels = [
+            (breakout_range_high, f"Range +{range_pct_label}", "#16a34a", "dot", "top right"),
+            (breakout_range_low, f"Range -{range_pct_label}", "#dc2626", "dot", "bottom right"),
+        ]
+        for level, label, color, dash, annotation_position in lifecycle_range_levels:
+            if level is None or pd.isna(level):
+                continue
+            self.fig.add_hline(
+                y=float(level),
+                line_color=color,
+                line_width=1,
+                line_dash=dash,
+                annotation_text=f"{label} {float(level):.2f}",
+                annotation_position=annotation_position,
+                row=row,
+                col=col,
+            )
+
+        self._add_price_marker(
+            breakout_date,
+            breakout_close,
+            "Breakout",
+            "#2563eb",
+            "star",
+            row=row,
+            col=col,
+            textposition="top center",
+        )
+
         return self
 
     def add_tight_close_blocks(
@@ -418,11 +590,11 @@ class LayeredCupChart(LayeredPriceChart):
         if result_row is None or 'pivot_index' not in result_row:
             return self
     
-        pivot_date = result_row['pivot_index']
+        pivot_date = self._nearest_index(result_row['pivot_index'])
         pivot_price = result_row['pivot_price']
     
         # Check if pivot_date exists in the dataframe index
-        if pivot_date not in self.df.index:
+        if pivot_date is None:
             return self
     
         self.fig.add_trace(
@@ -463,13 +635,14 @@ class LayeredCupChart(LayeredPriceChart):
 
 def plot_cup_formation(df_weekly, symbol, params, result_row=None):
     chart = LayeredCupChart(df_weekly, symbol, params)
+    chart.add_candles().add_price_moving_averages().add_peak_low_markers(result_row=result_row)
+    chart.add_tight_close_blocks()
+    if result_row is not None and not (
+        "left_high_index" in result_row or "base_low_index" in result_row
+    ):
+        chart.add_pivot_marker(result_row)
     return (
         chart
-        .add_candles()
-        .add_price_moving_averages()
-        .add_peak_low_markers()
-        .add_tight_close_blocks()
-        .add_pivot_marker(result_row)  # This will now use the passed result_row
         .add_volume_bars()
         .add_volume_moving_averages()
         .add_rsi()

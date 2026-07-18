@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from modular_base_scanner import CupScanner
+from base_lifecycle_pages import render_base_phase_page, render_tracking_phase_page
 from chart_plot import plot_cup_formation, plot_custom_ohlcv_chart, plot_trend_follower_chart
 from trend_follower.final_trend_follower import EMAScanner
 from audio import build_transcript_pdf, load_saved_records, process_audio_request
@@ -35,6 +36,36 @@ def first_existing_path(*candidates):
         if path.exists():
             return path
     return None
+
+
+def get_config_value(name):
+    value = os.getenv(name)
+    if value:
+        return value
+
+    try:
+        return st.secrets[name]
+    except Exception:
+        return None
+
+
+def google_drive_csv_url(value):
+    value = str(value).strip()
+    if not value:
+        return value
+
+    if "drive.google.com" not in value:
+        return f"https://drive.google.com/uc?export=download&id={value}"
+
+    if "/file/d/" in value:
+        file_id = value.split("/file/d/", 1)[1].split("/", 1)[0]
+        return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    if "id=" in value:
+        file_id = value.split("id=", 1)[1].split("&", 1)[0]
+        return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    return value
 
 
 # @st.cache_data(show_spinner=False)
@@ -114,19 +145,33 @@ def load_announcements_data():
 
 @st.cache_data(show_spinner=False)
 def load_custom_data_center():
+    drive_source = (
+        get_config_value("CUSTOM_DATA_CENTER_CSV_URL")
+        or get_config_value("CUSTOM_DATA_CENTER_GOOGLE_DRIVE_FILE_ID")
+    )
     custom_path = ROOT_DIR / "data" / "static" / "custom_data_center.csv"
-    if not custom_path.exists():
-        raise FileNotFoundError(f"Custom data center file was not found: {custom_path}")
+    source_label = str(custom_path)
 
-    custom_df = pd.read_csv(custom_path)
+    if drive_source:
+        source_label = "Google Drive custom data center CSV"
+        custom_df = pd.read_csv(google_drive_csv_url(drive_source))
+    else:
+        if not custom_path.exists():
+            raise FileNotFoundError(
+                "Custom data center CSV was not found locally and no Google Drive "
+                "source was configured. Set CUSTOM_DATA_CENTER_CSV_URL or "
+                "CUSTOM_DATA_CENTER_GOOGLE_DRIVE_FILE_ID in Streamlit secrets."
+            )
+        custom_df = pd.read_csv(custom_path)
+
     if custom_df.empty:
-        raise ValueError("Custom data center file is empty.")
+        raise ValueError(f"{source_label} is empty.")
 
     custom_df.columns = custom_df.columns.str.strip()
     required_cols = ["date", "index_symbol", "open", "high", "low", "close", "volume"]
     missing_cols = [col for col in required_cols if col not in custom_df.columns]
     if missing_cols:
-        raise ValueError(f"Custom data center file is missing required columns: {missing_cols}")
+        raise ValueError(f"{source_label} is missing required columns: {missing_cols}")
 
     custom_df["Date"] = pd.to_datetime(
         custom_df["date"].astype(str),
@@ -135,7 +180,7 @@ def load_custom_data_center():
     )
     if custom_df["Date"].isna().any():
         bad_dates = custom_df.loc[custom_df["Date"].isna(), "date"].head(5).tolist()
-        raise ValueError(f"Custom data center file has invalid date values: {bad_dates}")
+        raise ValueError(f"{source_label} has invalid date values: {bad_dates}")
 
     custom_df = custom_df.rename(
         columns={
@@ -152,7 +197,7 @@ def load_custom_data_center():
         custom_df[col] = pd.to_numeric(custom_df[col], errors="coerce")
 
     if custom_df[ohlcv_cols].isna().any().any():
-        raise ValueError("Custom data center file has non-numeric OHLCV values.")
+        raise ValueError(f"{source_label} has non-numeric OHLCV values.")
 
     custom_df["index_symbol"] = custom_df["index_symbol"].astype(str).str.strip()
     if "turnover" in custom_df.columns:
@@ -318,10 +363,19 @@ def get_column_options(df, column_name):
 
 def load_daily_price_data(symbol):
     """Load a daily parquet file and normalize the date index."""
+    symbol = str(symbol).strip()
+    candidate_symbols = [symbol]
+    if not symbol.endswith(".NS"):
+        candidate_symbols.append(f"{symbol}.NS")
+
     data_candidates = [
-        ROOT_DIR / "data" / "daily" / f"{symbol}.parquet",
-        Path("data/daily") / f"{symbol}.parquet",
-        Path("../data/daily") / f"{symbol}.parquet",
+        path
+        for candidate_symbol in candidate_symbols
+        for path in [
+            ROOT_DIR / "data" / "daily" / f"{candidate_symbol}.parquet",
+            Path("data/daily") / f"{candidate_symbol}.parquet",
+            Path("../data/daily") / f"{candidate_symbol}.parquet",
+        ]
     ]
 
     for path in data_candidates:
@@ -338,6 +392,7 @@ def load_daily_price_data(symbol):
 
     raise FileNotFoundError(f"Could not find daily data for {symbol}")
 
+
 # st.set_page_config(layout="wide")
 ## data read
 # Load shared data once through cached helpers so all tabs reuse it.
@@ -349,7 +404,18 @@ announcements_df = load_announcements_data()
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Choose a page",
-    ["Home", "Base Formation", "Announcements", "Earnings Summary", "Bulk_Block_Deal", "Trend_Follower", "Custom Data Center", "Audio Transcript"],
+    [
+        "Home",
+        "Base Formation",
+        "Base Phase",
+        "Tracking Phase",
+        "Announcements",
+        "Earnings Summary",
+        "Bulk_Block_Deal",
+        "Trend_Follower",
+        "Custom Data Center",
+        "Audio Transcript",
+    ],
 )
 m_cap =st.sidebar.number_input("Market Cap Filter (in Crores)", min_value=10, value=1000, step=1000000000)
 if page == "Home":
@@ -368,17 +434,16 @@ elif page == "Base Formation":
     min_depth = st.sidebar.slider("Min Depth (%)", min_value=1, max_value=100, value=15)
     max_depth = st.sidebar.slider("Max Depth (%)", min_value=1, max_value=100, value=60)
     recovery_min = st.sidebar.slider("Min Recovery from Bottom (%)", min_value=1, max_value=150, value=60)
-    recovery_max = st.sidebar.slider("Max Recovery from Bottom (%)", min_value=1, max_value=150, value=120)
     atr_window = st.sidebar.number_input("ATR Window", min_value=1, value=14, step=1)
     compression_lookback = st.sidebar.number_input("Compression Lookback (Weeks)", min_value=1, value=10, step=1)
 
     params = {
         'MIN_WEEKS': min_weeks,
         'MAX_WEEKS': max_weeks,
+        'MIN_WEEKLY_BARS_REQUIRED': min_weeks + 2,
         'MIN_DEPTH': min_depth / 100.0,
         'MAX_DEPTH': max_depth / 100.0,
         'RECOVERY_MIN': recovery_min / 100.0,
-        'RECOVERY_MAX': recovery_max / 100.0,
         'ATR_WINDOW': atr_window,
         'COMPRESSION_LOOKBACK': compression_lookback,
     }
@@ -388,6 +453,14 @@ elif page == "Base Formation":
     if st.sidebar.button("Run Scan"):
         scanner = CupScanner(params, debug=False)
         st.session_state.base_scan_results = scanner.run_scan()
+        st.session_state.base_scan_stats = {
+            "DMA Filtered": scanner.stats.dma_filtered,
+            "ATH Filtered": scanner.stats.ath_filtered,
+            "Min Depth": scanner.stats.min_depth,
+            "Duration": scanner.stats.duration,
+            "Recovery": scanner.stats.recovery,
+            "Prior Uptrend": scanner.stats.prior_uptrend,
+        }
 
     if 'base_scan_results' in st.session_state:
         bulk_df = st.session_state.base_scan_results
@@ -395,6 +468,21 @@ elif page == "Base Formation":
             st.warning("No stocks found for the given criteria. Try adjusting the parameters and running the scan again.")
         else:
             st.subheader("Stocks with Potential Cup Formations")
+            show_only_prior_uptrend = st.checkbox(
+                "Show only prior uptrend stocks",
+                value=False,
+                key="base_show_only_prior_uptrend",
+            )
+
+            if "base_scan_stats" in st.session_state:
+                stats_df = pd.DataFrame(
+                    [
+                        {"Stage": stage, "Count": len(symbols), "Symbols": ", ".join(symbols)}
+                        for stage, symbols in st.session_state.base_scan_stats.items()
+                    ]
+                )
+                with st.expander("Scanner Stage Details"):
+                    st.dataframe(stats_df, use_container_width=True, hide_index=True)
             
             display_df = bulk_df
             if not static_df.empty:
@@ -405,8 +493,7 @@ elif page == "Base Formation":
                     display_df['Market Cap (Cr)'] = (display_df['marketCap'] / 1_00_00_000).round(0)
 
                 # Define the desired column order as requested
-                # metrics_to_front = ['Tight Groups', 'Depth', 'Recovery']
-                metrics_to_front = ['Tight Groups', 'Depth', 'Recovery', 'prior_uptrend', 'pivot']
+                metrics_to_front = ['Tight Groups', 'Depth', 'recovery_pct', 'prior_uptrend_pct', 'min_prior_uptrend_pct', 'prior_uptrend', 'pivot']
                 bulk_df_cols = [col for col in bulk_df.columns if col not in ['Symbol'] + metrics_to_front]
                 static_cols_to_show = ['longName', 'industry', 'sector', 'Market Cap (Cr)']
 
@@ -416,7 +503,19 @@ elif page == "Base Formation":
                 # Filter list to ensure all columns exist in the merged DataFrame
                 final_cols = [col for col in ordered_cols if col in display_df.columns]
                 display_df = display_df[final_cols]
-                display_df = display_df[display_df['Market Cap (Cr)'] >= m_cap]  # Apply market cap filter
+                if 'Market Cap (Cr)' in display_df.columns:
+                    before_market_cap_filter = len(display_df)
+                    display_df = display_df[
+                        (display_df['Market Cap (Cr)'] >= m_cap)
+                        | display_df['Market Cap (Cr)'].isna()
+                    ]
+                    st.caption(
+                        f"Showing {len(display_df)} of {before_market_cap_filter} final candidates "
+                        f"after the {m_cap} Cr market-cap filter. Rows with unknown market cap are kept."
+                    )
+
+            if show_only_prior_uptrend and "prior_uptrend" in display_df.columns:
+                display_df = display_df[display_df["prior_uptrend"] == True]
 
             event = st.dataframe(
                 display_df,  # Display the merged DataFrame
@@ -509,6 +608,12 @@ elif page == "Base Formation":
                     st.error(f"Could not find data file for {selected_symbol}.")
                 except Exception as e:
                     st.error(f"An error occurred while plotting {selected_symbol}: {e}")
+
+elif page == "Tracking Phase":
+    render_tracking_phase_page(static_df, m_cap)
+
+elif page == "Base Phase":
+    render_base_phase_page(static_df, m_cap)
 
 elif page == "Announcements":
     st.title("Announcements")
