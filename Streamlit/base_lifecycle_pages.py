@@ -34,6 +34,52 @@ BASE_LIFECYCLE_DEFAULT_PARAMS = {
 }
 
 
+def render_lifecycle_control_styles():
+    """Keep lifecycle multiselect controls compact and theme-compatible."""
+    st.markdown(
+        """
+        <style>
+        /* Neutral compact pills for selected multiselect values. */
+        [data-baseweb="select"] [data-baseweb="tag"] {
+            background-color: var(--secondary-background-color) !important;
+            color: var(--text-color) !important;
+            border: 1px solid rgba(128, 128, 128, 0.35) !important;
+            border-radius: 0.35rem !important;
+            min-height: 1.25rem !important;
+            height: 1.25rem !important;
+            padding: 0 0.28rem !important;
+            margin: 0.08rem !important;
+        }
+        [data-baseweb="select"] [data-baseweb="tag"] span {
+            color: var(--text-color) !important;
+            font-size: 0.70rem !important;
+            line-height: 1rem !important;
+        }
+        [data-baseweb="select"] [data-baseweb="tag"] svg {
+            color: var(--text-color) !important;
+            fill: currentColor !important;
+            width: 0.68rem !important;
+            height: 0.68rem !important;
+        }
+        [data-baseweb="select"] > div {
+            min-height: 2.05rem !important;
+            font-size: 0.78rem !important;
+        }
+        li[role="option"][aria-selected="true"] {
+            background-color: var(--secondary-background-color) !important;
+            color: var(--text-color) !important;
+            font-size: 0.78rem !important;
+        }
+        li[role="option"][aria-selected="true"] svg {
+            color: var(--text-color) !important;
+            fill: currentColor !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def long_frame_to_stage_results(stage_df):
     if stage_df is None or stage_df.empty or "stage" not in stage_df.columns:
         return {stage: pd.DataFrame() for stage in STAGE_KEYS}
@@ -190,32 +236,148 @@ def add_lifecycle_display_columns(df, static_df, m_cap, all_windows_df=None):
     return display_df
 
 
-def lifecycle_preferred_table(df):
-    # Keep the scan list focused on the decision fields. Company metadata,
-    # review tags, dates, and diagnostics are shown after a row is selected.
+def lifecycle_default_columns(df):
+    """Return the small decision set shown before optional columns are selected."""
     preferred_cols = [
         "Symbol",
         "lifecycle_status",
-        "tracking_state",
         "lifecycle_phase",
         "current_zone",
         "pivot_source",
         "selected_pivot",
         "distance_from_pivot_pct",
-        "scan_window_weeks",
-        "Depth",
-        "recovery_pct",
-        "left_high_pivot",
-        "handle_high_pivot",
-        "handle_pullback_pct",
-        "handle_max_pullback_pct",
         "breakout_range_low",
         "breakout_range_high",
-        "breakout_date",
-        "breakout_success_date",
     ]
-    cols = [col for col in preferred_cols if col in df.columns]
-    return df[cols]
+    return [col for col in preferred_cols if col in df.columns]
+
+
+REVIEW_STATUS_PRIORITY = {
+    "FAILED": 0,
+    "BREAKOUT_RANGE_BREACH": 1,
+    "POST_SUCCESS_REENTRY_RANGE": 2,
+    "BREAKOUT_RETEST_RANGE": 3,
+    "BREAKOUT_BUY_RANGE": 4,
+    "BREAKOUT_CONFIRMED": 5,
+    "HANDLE_READY": 6,
+    "NEAR_PIVOT": 7,
+    "BREAKOUT_SUCCESS": 8,
+    "BREAKOUT_STALLED": 9,
+    "RESETTING": 10,
+    "TRACKING": 11,
+    "BASE_FORMING": 12,
+}
+
+
+def sort_lifecycle_for_review(df, view_key=""):
+    """Sort rows for review without introducing a numerical strategy score."""
+    if df.empty:
+        return df
+
+    sorted_df = df.copy()
+    if "history" in view_key and "tracking_date" in sorted_df.columns:
+        return sorted_df.sort_values(
+            ["tracking_date", "Symbol"],
+            ascending=[False, True],
+            na_position="last",
+            kind="stable",
+        ).reset_index(drop=True)
+    if "archived" in view_key and "archived_date" in sorted_df.columns:
+        return sorted_df.sort_values(
+            ["archived_date", "Symbol"],
+            ascending=[False, True],
+            na_position="last",
+            kind="stable",
+        ).reset_index(drop=True)
+
+    sorted_df["_review_priority"] = (
+        sorted_df.get("lifecycle_status", pd.Series(index=sorted_df.index, dtype="object"))
+        .map(REVIEW_STATUS_PRIORITY)
+        .fillna(99)
+    )
+
+    weekly_change = sorted_df.get(
+        "weekly_change",
+        pd.Series("", index=sorted_df.index, dtype="object"),
+    ).fillna("").astype(str)
+    sorted_df["_review_change_priority"] = ~(
+        weekly_change.eq("New") | weekly_change.str.contains("->", regex=False)
+    )
+
+    event_date = pd.Series(pd.NaT, index=sorted_df.index, dtype="datetime64[ns]")
+    for date_column in [
+        "breakout_success_date",
+        "breakout_date",
+        "last_tracked_date",
+        "scan_as_of_date",
+        "tracking_date",
+        "archived_date",
+    ]:
+        if date_column in sorted_df.columns:
+            event_date = event_date.fillna(
+                pd.to_datetime(sorted_df[date_column], errors="coerce")
+            )
+    sorted_df["_review_event_date"] = event_date
+
+    distance = pd.to_numeric(
+        sorted_df.get(
+            "distance_from_pivot_pct",
+            pd.Series(float("nan"), index=sorted_df.index),
+        ),
+        errors="coerce",
+    )
+    sorted_df["_review_distance"] = distance.abs()
+
+    sort_columns = [
+        "_review_priority",
+        "_review_change_priority",
+        "_review_event_date",
+        "_review_distance",
+    ]
+    ascending = [True, True, False, True]
+    if "Symbol" in sorted_df.columns:
+        sort_columns.append("Symbol")
+        ascending.append(True)
+
+    return (
+        sorted_df.sort_values(
+            sort_columns,
+            ascending=ascending,
+            na_position="last",
+            kind="stable",
+        )
+        .drop(
+            columns=[
+                "_review_priority",
+                "_review_change_priority",
+                "_review_event_date",
+                "_review_distance",
+            ]
+        )
+        .reset_index(drop=True)
+    )
+
+
+def selectable_table_columns(df, key, default_columns=None, label="Table columns"):
+    """Show important columns by default and allow optional fields on demand."""
+    if df.empty:
+        return []
+
+    available_columns = list(df.columns)
+    defaults = default_columns or lifecycle_default_columns(df)
+    defaults = [column for column in defaults if column in available_columns]
+    selected = st.multiselect(
+        label,
+        options=available_columns,
+        default=defaults,
+        key=key,
+        help="Add structure, breakout, company, industry, or review fields only when needed.",
+    )
+
+    # Symbol remains visible because it identifies the row used to open the chart.
+    if "Symbol" in available_columns and "Symbol" not in selected:
+        selected.insert(0, "Symbol")
+    return selected or (["Symbol"] if "Symbol" in available_columns else available_columns[:1])
 
 
 def lifecycle_selected_detail_frame(row, columns):
@@ -320,8 +482,15 @@ def render_lifecycle_table_with_chart(display_df, key_prefix, source_df=None):
         st.info("No rows available for this view.")
         return
 
+    review_df = sort_lifecycle_for_review(display_df, key_prefix)
+    selected_columns = selectable_table_columns(
+        review_df,
+        key=f"{key_prefix}_columns",
+        label="Visible columns",
+    )
+    table_df = review_df[selected_columns]
     event = st.dataframe(
-        lifecycle_preferred_table(display_df),
+        table_df,
         use_container_width=True,
         hide_index=True,
         on_select="rerun",
@@ -330,18 +499,12 @@ def render_lifecycle_table_with_chart(display_df, key_prefix, source_df=None):
     )
 
     if event.selection.rows:
-        selected_row = display_df.iloc[event.selection.rows[0]]
+        selected_row = review_df.iloc[event.selection.rows[0]]
         selected_symbol = selected_row["Symbol"]
         st.subheader(f"Chart for {selected_symbol}")
         render_lifecycle_selected_details(selected_row)
         try:
-            result_lookup_df = source_df if source_df is not None and not source_df.empty else display_df
-            result_row = (
-                result_lookup_df[result_lookup_df["Symbol"] == selected_symbol].iloc[0].to_dict()
-                if "Symbol" in result_lookup_df.columns
-                and not result_lookup_df[result_lookup_df["Symbol"] == selected_symbol].empty
-                else selected_row.to_dict()
-            )
+            result_row = selected_row.to_dict()
             fig = render_lifecycle_chart_for_symbol(
                 selected_symbol,
                 result_row=result_row,
@@ -408,34 +571,25 @@ def render_review_funnel(stage_results, lifecycle_df):
             st.info(f"No rows available for {selected_stage_label}.")
             return
 
-        stage_preferred_cols = [
+        stage_df = sort_lifecycle_for_review(
+            stage_df,
+            view_key=f"review_{selected_stage}",
+        )
+        stage_default_cols = [
             "Symbol",
-            "scan_window_weeks",
             "failure_reason",
-            "latest_close",
-            "weekly_bars",
-            "required_weekly_bars",
-            "Depth",
-            "recovery_pct",
-            "prior_uptrend_pct",
-            "min_prior_uptrend_pct",
-            "prior_uptrend_lookback_weeks",
-            "prior_uptrend_advance_weeks",
-            "peak_to_low_weeks",
+            "lifecycle_status",
+            "current_zone",
             "pivot_source",
             "selected_pivot",
-            "handle_high_pivot",
-            "handle_pullback_pct",
-            "handle_max_pullback_pct",
-            "pivot_detected",
             "distance_from_pivot_pct",
-            "lifecycle_phase",
-            "current_zone",
-            "lifecycle_status",
-            "setup_reason",
-            "tracking_eligible",
         ]
-        stage_cols = [col for col in stage_preferred_cols if col in stage_df.columns]
+        stage_cols = selectable_table_columns(
+            stage_df,
+            key=f"lifecycle_review_{selected_stage}_columns",
+            default_columns=stage_default_cols,
+            label="Visible review columns",
+        )
         stage_display_df = stage_df[stage_cols]
         stage_event = st.dataframe(
             stage_display_df,
@@ -447,7 +601,8 @@ def render_review_funnel(stage_results, lifecycle_df):
         )
 
         if stage_event.selection.rows:
-            selected_stage_row = stage_display_df.iloc[stage_event.selection.rows[0]]
+            # Use the complete source row for charts even when most table columns are hidden.
+            selected_stage_row = stage_df.iloc[stage_event.selection.rows[0]]
             selected_stage_symbol = selected_stage_row["Symbol"]
             st.subheader(f"Review Chart for {selected_stage_symbol}")
             try:
@@ -467,6 +622,7 @@ def render_review_funnel(stage_results, lifecycle_df):
 
 
 def render_base_phase_page(static_df, m_cap):
+    render_lifecycle_control_styles()
     st.title("Base Phase")
     st.info("Review saved base snapshots. Run scans from the command line while the engine logic is evolving.")
 
@@ -526,10 +682,32 @@ def render_base_phase_page(static_df, m_cap):
 
     if not all_windows_df.empty:
         with st.expander("All Window Results"):
-            st.dataframe(all_windows_df, use_container_width=True, hide_index=True)
+            sorted_all_windows_df = sort_lifecycle_for_review(
+                all_windows_df,
+                view_key="base_phase_all_windows",
+            )
+            all_window_columns = selectable_table_columns(
+                sorted_all_windows_df,
+                key="base_phase_all_windows_columns",
+                default_columns=[
+                    "Symbol",
+                    "scan_window_weeks",
+                    "lifecycle_status",
+                    "pivot_source",
+                    "selected_pivot",
+                    "distance_from_pivot_pct",
+                ],
+                label="Visible all-window columns",
+            )
+            st.dataframe(
+                sorted_all_windows_df[all_window_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 def render_tracking_phase_page(static_df, m_cap):
+    render_lifecycle_control_styles()
     st.title("Tracking Phase")
     st.info("Review active bases that are being carried forward after they became tracking-eligible.")
 
