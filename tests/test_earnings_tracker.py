@@ -3,10 +3,27 @@ from datetime import date
 import pandas as pd
 
 from Streamlit.earnings_tracker import (
+    _response_diagnostic,
     enrich_with_static_data,
     filter_company_context,
     normalize_event_calendar,
 )
+
+
+class FakeResponse:
+    status_code = 403
+    headers = {"Content-Type": "text/html; charset=utf-8"}
+    url = "https://www.nseindia.com/api/event-calendar?index=equities"
+    text = "<html>\n  Access denied   by Akamai\n</html>"
+
+
+def test_response_diagnostic_includes_safe_failure_details():
+    diagnostic = _response_diagnostic(FakeResponse())
+
+    assert "HTTP status: 403" in diagnostic
+    assert "Content-Type: text/html" in diagnostic
+    assert "event-calendar" in diagnostic
+    assert "<html> Access denied by Akamai </html>" in diagnostic
 
 
 def test_normalize_keeps_combined_purpose_and_excludes_dividend_only():
