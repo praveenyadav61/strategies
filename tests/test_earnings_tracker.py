@@ -2,11 +2,10 @@ from datetime import date
 
 import pandas as pd
 
+from data_layer.earnings_calendar import normalize_event_calendar, response_diagnostic
 from Streamlit.earnings_tracker import (
-    _response_diagnostic,
     enrich_with_static_data,
     filter_company_context,
-    normalize_event_calendar,
 )
 
 
@@ -18,7 +17,7 @@ class FakeResponse:
 
 
 def test_response_diagnostic_includes_safe_failure_details():
-    diagnostic = _response_diagnostic(FakeResponse())
+    diagnostic = response_diagnostic(FakeResponse())
 
     assert "HTTP status: 403" in diagnostic
     assert "Content-Type: text/html" in diagnostic
