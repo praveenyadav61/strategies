@@ -21,6 +21,7 @@ from chart_plot import plot_cup_formation, plot_custom_ohlcv_chart, plot_trend_f
 from trend_follower.final_trend_follower import EMAScanner
 from audio import build_transcript_pdf, load_saved_records, process_audio_request
 from Streamlit.earnings_summary import render_earnings_summary_page
+from Streamlit.earnings_tracker import render_earnings_tracker_page
 from Streamlit.bulk_block_analysis import render_bulk_block_page
 
 
@@ -412,6 +413,7 @@ page = st.sidebar.radio(
         "Tracking Phase",
         "Announcements",
         "Earnings Summary",
+        "Earnings Tracker",
         "Bulk_Block_Deal",
         "Trend_Follower",
         "Custom Data Center",
@@ -672,6 +674,14 @@ elif page == "Announcements":
 
 elif page == "Earnings Summary":
     render_earnings_summary_page()
+
+elif page == "Earnings Tracker":
+    render_earnings_tracker_page(
+        static_df,
+        announcements_df,
+        bulk_deals_df,
+        block_deals_df,
+    )
 
 elif page == "Audio Transcript":
     st.title("Audio Transcript")
