@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -13,10 +14,26 @@ NSE_HOME_URL = "https://www.nseindia.com/companies-listing/corporate-filings-eve
 NSE_EVENT_URL = "https://www.nseindia.com/api/event-calendar"
 REQUEST_TIMEOUT = 20
 CONTEXT_LOOKBACK_DAYS = 90
+RESPONSE_PREVIEW_LENGTH = 300
+
+LOGGER = logging.getLogger(__name__)
 
 
 class NSEEventCalendarError(RuntimeError):
     """Raised when the NSE event calendar cannot be retrieved or decoded."""
+
+
+def _response_diagnostic(response: requests.Response) -> str:
+    content_type = response.headers.get("Content-Type", "unknown")
+    preview = " ".join((response.text or "").split())[:RESPONSE_PREVIEW_LENGTH]
+    if not preview:
+        preview = "<empty response>"
+    return (
+        f"HTTP status: {response.status_code}\n"
+        f"Content-Type: {content_type}\n"
+        f"Final URL: {response.url}\n"
+        f"Response preview: {preview}"
+    )
 
 
 def _nse_headers() -> dict[str, str]:
@@ -81,25 +98,72 @@ def normalize_event_calendar(payload) -> pd.DataFrame:
 def fetch_earnings_calendar(start_date: date, end_date: date) -> pd.DataFrame:
     session = requests.Session()
     session.headers.update(_nse_headers())
+    home_diagnostic = "Cookie bootstrap: not attempted"
     try:
         # NSE commonly requires cookies from a normal page visit before API access.
-        session.get(NSE_HOME_URL, timeout=REQUEST_TIMEOUT)
-        response = session.get(
-            NSE_EVENT_URL,
-            params={
-                "index": "equities",
-                "from_date": start_date.strftime("%d-%m-%Y"),
-                "to_date": end_date.strftime("%d-%m-%Y"),
-                "purpose": "Financial Results",
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        return normalize_event_calendar(response.json())
-    except (requests.RequestException, ValueError) as exc:
-        raise NSEEventCalendarError(
-            "NSE did not return the event calendar. Please wait a moment and try again."
-        ) from exc
+        try:
+            home_response = session.get(NSE_HOME_URL, timeout=REQUEST_TIMEOUT)
+            home_diagnostic = (
+                f"Cookie bootstrap: HTTP {home_response.status_code}; "
+                f"cookies received: {len(session.cookies)}"
+            )
+        except requests.RequestException as exc:
+            home_diagnostic = (
+                f"Cookie bootstrap failed: {type(exc).__name__}: {exc}"
+            )
+
+        try:
+            response = session.get(
+                NSE_EVENT_URL,
+                params={
+                    "index": "equities",
+                    "from_date": start_date.strftime("%d-%m-%Y"),
+                    "to_date": end_date.strftime("%d-%m-%Y"),
+                    "purpose": "Financial Results",
+                },
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            message = (
+                "NSE API network request failed.\n"
+                f"{home_diagnostic}\n"
+                f"Exception: {type(exc).__name__}: {exc}"
+            )
+            LOGGER.exception(message)
+            raise NSEEventCalendarError(message) from exc
+
+        if not response.ok:
+            message = (
+                "NSE API returned an unsuccessful response.\n"
+                f"{home_diagnostic}\n"
+                f"{_response_diagnostic(response)}"
+            )
+            LOGGER.error(message)
+            raise NSEEventCalendarError(message)
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            message = (
+                "NSE API returned a response that was not valid JSON.\n"
+                f"{home_diagnostic}\n"
+                f"{_response_diagnostic(response)}\n"
+                f"Exception: {type(exc).__name__}: {exc}"
+            )
+            LOGGER.exception(message)
+            raise NSEEventCalendarError(message) from exc
+
+        try:
+            return normalize_event_calendar(payload)
+        except NSEEventCalendarError as exc:
+            message = (
+                "NSE API returned an unexpected JSON structure.\n"
+                f"{home_diagnostic}\n"
+                f"{_response_diagnostic(response)}\n"
+                f"Parser error: {exc}"
+            )
+            LOGGER.exception(message)
+            raise NSEEventCalendarError(message) from exc
     finally:
         session.close()
 
@@ -273,7 +337,8 @@ def render_earnings_tracker_page(
                     )
                 st.session_state.earnings_tracker_range = (start_date, end_date)
             except NSEEventCalendarError as exc:
-                st.error(str(exc))
+                st.error("Could not load the NSE event calendar.")
+                st.code(str(exc), language="text")
                 st.session_state.pop("earnings_tracker_results", None)
 
     results = st.session_state.get("earnings_tracker_results")
