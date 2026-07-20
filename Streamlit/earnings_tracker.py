@@ -1,175 +1,31 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-import logging
 from pathlib import Path
 
 import pandas as pd
-import requests
 import streamlit as st
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-NSE_HOME_URL = "https://www.nseindia.com/companies-listing/corporate-filings-event-calendar"
-NSE_EVENT_URL = "https://www.nseindia.com/api/event-calendar"
-REQUEST_TIMEOUT = 20
+CALENDAR_SNAPSHOT_PATH = ROOT_DIR / "data" / "static" / "earnings_calendar.parquet"
 CONTEXT_LOOKBACK_DAYS = 90
-RESPONSE_PREVIEW_LENGTH = 300
-
-LOGGER = logging.getLogger(__name__)
-
-
-class NSEEventCalendarError(RuntimeError):
-    """Raised when the NSE event calendar cannot be retrieved or decoded."""
-
-
-def _response_diagnostic(response: requests.Response) -> str:
-    content_type = response.headers.get("Content-Type", "unknown")
-    preview = " ".join((response.text or "").split())[:RESPONSE_PREVIEW_LENGTH]
-    if not preview:
-        preview = "<empty response>"
-    return (
-        f"HTTP status: {response.status_code}\n"
-        f"Content-Type: {content_type}\n"
-        f"Final URL: {response.url}\n"
-        f"Response preview: {preview}"
-    )
-
-
-def _nse_headers() -> dict[str, str]:
-    return {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": NSE_HOME_URL,
-    }
-
-
-def _extract_event_rows(payload) -> list[dict]:
-    if isinstance(payload, list):
-        return [row for row in payload if isinstance(row, dict)]
-    if isinstance(payload, dict):
-        for key in ("data", "records", "events"):
-            rows = payload.get(key)
-            if isinstance(rows, list):
-                return [row for row in rows if isinstance(row, dict)]
-    raise NSEEventCalendarError("NSE returned an unexpected event-calendar response.")
-
-
-def normalize_event_calendar(payload) -> pd.DataFrame:
-    rows = _extract_event_rows(payload)
-    if not rows:
-        return pd.DataFrame(columns=["Date", "Symbol", "Company", "Purpose", "Details"])
-
-    raw = pd.DataFrame(rows)
-    aliases = {
-        "Date": ("date", "bm_date", "meeting_date"),
-        "Symbol": ("symbol", "sm_symbol"),
-        "Company": ("company", "company_name", "sm_name"),
-        "Purpose": ("purpose", "bm_purpose"),
-        "Details": ("description", "details", "bm_desc"),
-    }
-    normalized = pd.DataFrame(index=raw.index)
-    for target, candidates in aliases.items():
-        source = next((column for column in candidates if column in raw.columns), None)
-        normalized[target] = raw[source] if source else ""
-
-    normalized["Date"] = pd.to_datetime(normalized["Date"], errors="coerce", dayfirst=True)
-    normalized["Symbol"] = normalized["Symbol"].astype(str).str.strip().str.upper()
-    for column in ("Company", "Purpose", "Details"):
-        normalized[column] = normalized[column].fillna("").astype(str).str.strip()
-
-    # Combined purposes such as Financial Results/Dividend remain included.
-    standalone_dividend = normalized["Purpose"].str.fullmatch(
-        r"\s*dividend\s*", case=False, na=False
-    )
-    return (
-        normalized.loc[~standalone_dividend]
-        .drop_duplicates()
-        .sort_values(["Date", "Symbol"], na_position="last")
-        .reset_index(drop=True)
-    )
-
-
-def fetch_earnings_calendar(start_date: date, end_date: date) -> pd.DataFrame:
-    session = requests.Session()
-    session.headers.update(_nse_headers())
-    home_diagnostic = "Cookie bootstrap: not attempted"
-    try:
-        # NSE commonly requires cookies from a normal page visit before API access.
-        try:
-            home_response = session.get(NSE_HOME_URL, timeout=REQUEST_TIMEOUT)
-            home_diagnostic = (
-                f"Cookie bootstrap: HTTP {home_response.status_code}; "
-                f"cookies received: {len(session.cookies)}"
-            )
-        except requests.RequestException as exc:
-            home_diagnostic = (
-                f"Cookie bootstrap failed: {type(exc).__name__}: {exc}"
-            )
-
-        try:
-            response = session.get(
-                NSE_EVENT_URL,
-                params={
-                    "index": "equities",
-                    "from_date": start_date.strftime("%d-%m-%Y"),
-                    "to_date": end_date.strftime("%d-%m-%Y"),
-                    "purpose": "Financial Results",
-                },
-                timeout=REQUEST_TIMEOUT,
-            )
-        except requests.RequestException as exc:
-            message = (
-                "NSE API network request failed.\n"
-                f"{home_diagnostic}\n"
-                f"Exception: {type(exc).__name__}: {exc}"
-            )
-            LOGGER.exception(message)
-            raise NSEEventCalendarError(message) from exc
-
-        if not response.ok:
-            message = (
-                "NSE API returned an unsuccessful response.\n"
-                f"{home_diagnostic}\n"
-                f"{_response_diagnostic(response)}"
-            )
-            LOGGER.error(message)
-            raise NSEEventCalendarError(message)
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            message = (
-                "NSE API returned a response that was not valid JSON.\n"
-                f"{home_diagnostic}\n"
-                f"{_response_diagnostic(response)}\n"
-                f"Exception: {type(exc).__name__}: {exc}"
-            )
-            LOGGER.exception(message)
-            raise NSEEventCalendarError(message) from exc
-
-        try:
-            return normalize_event_calendar(payload)
-        except NSEEventCalendarError as exc:
-            message = (
-                "NSE API returned an unexpected JSON structure.\n"
-                f"{home_diagnostic}\n"
-                f"{_response_diagnostic(response)}\n"
-                f"Parser error: {exc}"
-            )
-            LOGGER.exception(message)
-            raise NSEEventCalendarError(message) from exc
-    finally:
-        session.close()
 
 
 def _join_symbol(series: pd.Series) -> pd.Series:
     return series.fillna("").astype(str).str.strip().str.upper().str.removesuffix(".NS")
+
+
+@st.cache_data(show_spinner=False)
+def load_calendar_snapshot(path: Path, modified_time: float | None) -> pd.DataFrame:
+    del modified_time
+    if not path.exists():
+        return pd.DataFrame()
+    snapshot = pd.read_parquet(path)
+    for column in ("Date", "fetched_at", "window_start", "window_end"):
+        if column in snapshot.columns:
+            snapshot[column] = pd.to_datetime(snapshot[column], errors="coerce")
+    return snapshot
 
 
 def enrich_with_static_data(events: pd.DataFrame, static_df: pd.DataFrame) -> pd.DataFrame:
@@ -329,17 +185,30 @@ def render_earnings_tracker_page(
             st.error("Start Date must be before or equal to End Date.")
             st.session_state.pop("earnings_tracker_results", None)
         else:
-            try:
-                with st.spinner("Loading the NSE earnings calendar..."):
-                    events = fetch_earnings_calendar(start_date, end_date)
-                    st.session_state.earnings_tracker_results = enrich_with_static_data(
-                        events, static_df
-                    )
-                st.session_state.earnings_tracker_range = (start_date, end_date)
-            except NSEEventCalendarError as exc:
-                st.error("Could not load the NSE event calendar.")
-                st.code(str(exc), language="text")
+            modified = (
+                CALENDAR_SNAPSHOT_PATH.stat().st_mtime
+                if CALENDAR_SNAPSHOT_PATH.exists()
+                else None
+            )
+            snapshot = load_calendar_snapshot(CALENDAR_SNAPSHOT_PATH, modified)
+            if snapshot.empty:
+                st.error(
+                    "The earnings calendar snapshot is unavailable. Run "
+                    "scripts/download_earnings_calendar.py to refresh it."
+                )
                 st.session_state.pop("earnings_tracker_results", None)
+            else:
+                events = snapshot[
+                    snapshot["Date"].dt.date.between(start_date, end_date)
+                ].copy()
+                st.session_state.earnings_tracker_results = enrich_with_static_data(
+                    events, static_df
+                )
+                st.session_state.earnings_tracker_range = (start_date, end_date)
+                fetched = snapshot.get("fetched_at")
+                st.session_state.earnings_tracker_fetched_at = (
+                    fetched.dropna().max() if fetched is not None else None
+                )
 
     results = st.session_state.get("earnings_tracker_results")
     if results is None:
@@ -347,6 +216,14 @@ def render_earnings_tracker_page(
     if results.empty:
         st.info("No earnings meetings were found for the selected date range.")
         return
+
+    fetched_at = st.session_state.get("earnings_tracker_fetched_at")
+    if pd.notna(fetched_at):
+        fetched_ist = pd.Timestamp(fetched_at)
+        if fetched_ist.tzinfo is None:
+            fetched_ist = fetched_ist.tz_localize("UTC")
+        fetched_ist = fetched_ist.tz_convert("Asia/Kolkata")
+        st.caption(f"Calendar last refreshed: {fetched_ist:%d %b %Y, %I:%M %p IST}")
 
     display_columns = [
         "Date", "Symbol", "Company", "Purpose", "Market Cap (Cr)",
