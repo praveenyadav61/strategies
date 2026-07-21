@@ -20,13 +20,17 @@ STAGE_KEYS = [
 ]
 BASE_LIFECYCLE_DEFAULT_PARAMS = {
     "MIN_WEEKS": 8,
+    "MIN_BASE_DURATION_WEEKS": 12,
     "MAX_WEEKS": 104,
-    "BASE_WINDOWS": [26, 52, 104],
+    "BASE_WINDOWS": [104, 52, 26],
     "MIN_WEEKLY_BARS_REQUIRED": 10,
     "MIN_DEPTH": 0.15,
     "MAX_DEPTH": 0.60,
-    "RECOVERY_MIN": 0.60,
-    "TRACKING_ELIGIBLE_RECOVERY_MIN": 0.85,
+    "MAX_SINGLE_WEEK_MOVE_TO_DEPTH_RATIO": 0.50,
+    "RECOVERY_MIN": 0.40,
+    "TRACKING_ELIGIBLE_RECOVERY_MIN": 0.40,
+    "BREAKOUT_CONSIDERATION_RECOVERY_MIN": 0.85,
+    "MIN_PEAK_TO_LOW_WEEKS": 4,
     "MIN_PRIOR_UPTREND_PCT": 0.20,
     "PRIOR_UPTREND_DEPTH_MULTIPLIER": 1.0,
     "ATR_WINDOW": 14,
@@ -194,6 +198,36 @@ def load_lifecycle_saved_state(snapshot_date=None):
     return lifecycle_df, all_windows_df, stage_results
 
 
+def ensure_journey_stage(df):
+    """Populate the v2 primary stage when an older saved snapshot is loaded."""
+    if df is None or df.empty:
+        return df
+
+    migrated = df.copy()
+
+    def infer_stage(row):
+        failed = row.get("lifecycle_phase") == "FAILED" or row.get("lifecycle_status") == "FAILED"
+        if failed:
+            return "FAILED"
+        success_value = row.get("breakout_success", False)
+        if pd.notna(success_value) and bool(success_value):
+            return "SUCCESSFUL_BREAKOUT"
+        if pd.notna(row.get("breakout_date")):
+            return "BREAKOUT_CONSIDERATION"
+        recovery = pd.to_numeric(row.get("recovery_pct"), errors="coerce")
+        if pd.notna(recovery) and float(recovery) >= 0.85:
+            return "BREAKOUT_CONSIDERATION"
+        if pd.notna(recovery) and float(recovery) >= 0.40:
+            return "RECOVERY_BUILDING"
+        return "NOT_TRACKED"
+
+    if "journey_stage" not in migrated.columns:
+        migrated["journey_stage"] = migrated.apply(infer_stage, axis=1)
+    if "base_window_weeks" not in migrated.columns and "scan_window_weeks" in migrated.columns:
+        migrated["base_window_weeks"] = migrated["scan_window_weeks"]
+    return migrated
+
+
 def lifecycle_bucket(row):
     status = row.get("lifecycle_status")
     distance = row.get("distance_from_pivot_pct")
@@ -258,9 +292,9 @@ def lifecycle_default_columns(df):
     """Return the small decision set shown before optional columns are selected."""
     preferred_cols = [
         "Symbol",
-        "lifecycle_status",
-        "lifecycle_phase",
-        "current_zone",
+        "journey_stage",
+        "recovery_pct",
+        "base_window_weeks",
         "pivot_source",
         "selected_pivot",
         "distance_from_pivot_pct",
@@ -270,20 +304,12 @@ def lifecycle_default_columns(df):
     return [col for col in preferred_cols if col in df.columns]
 
 
-REVIEW_STATUS_PRIORITY = {
-    "FAILED": 0,
-    "BREAKOUT_RANGE_BREACH": 1,
-    "POST_SUCCESS_REENTRY_RANGE": 2,
-    "BREAKOUT_RETEST_RANGE": 3,
-    "BREAKOUT_BUY_RANGE": 4,
-    "BREAKOUT_CONFIRMED": 5,
-    "HANDLE_READY": 6,
-    "NEAR_PIVOT": 7,
-    "BREAKOUT_SUCCESS": 8,
-    "BREAKOUT_STALLED": 9,
-    "RESETTING": 10,
-    "TRACKING": 11,
-    "BASE_FORMING": 12,
+JOURNEY_STAGE_PRIORITY = {
+    "BREAKOUT_CONSIDERATION": 0,
+    "RECOVERY_BUILDING": 1,
+    "SUCCESSFUL_BREAKOUT": 2,
+    "FAILED": 3,
+    "NOT_TRACKED": 4,
 }
 
 
@@ -309,33 +335,14 @@ def sort_lifecycle_for_review(df, view_key=""):
         ).reset_index(drop=True)
 
     sorted_df["_review_priority"] = (
-        sorted_df.get("lifecycle_status", pd.Series(index=sorted_df.index, dtype="object"))
-        .map(REVIEW_STATUS_PRIORITY)
+        sorted_df.get("journey_stage", pd.Series(index=sorted_df.index, dtype="object"))
+        .map(JOURNEY_STAGE_PRIORITY)
         .fillna(99)
     )
-
-    weekly_change = sorted_df.get(
-        "weekly_change",
-        pd.Series("", index=sorted_df.index, dtype="object"),
-    ).fillna("").astype(str)
-    sorted_df["_review_change_priority"] = ~(
-        weekly_change.eq("New") | weekly_change.str.contains("->", regex=False)
+    sorted_df["_review_recovery"] = pd.to_numeric(
+        sorted_df.get("recovery_pct", pd.Series(float("nan"), index=sorted_df.index)),
+        errors="coerce",
     )
-
-    event_date = pd.Series(pd.NaT, index=sorted_df.index, dtype="datetime64[ns]")
-    for date_column in [
-        "breakout_success_date",
-        "breakout_date",
-        "last_tracked_date",
-        "scan_as_of_date",
-        "tracking_date",
-        "archived_date",
-    ]:
-        if date_column in sorted_df.columns:
-            event_date = event_date.fillna(
-                pd.to_datetime(sorted_df[date_column], errors="coerce")
-            )
-    sorted_df["_review_event_date"] = event_date
 
     distance = pd.to_numeric(
         sorted_df.get(
@@ -348,11 +355,10 @@ def sort_lifecycle_for_review(df, view_key=""):
 
     sort_columns = [
         "_review_priority",
-        "_review_change_priority",
-        "_review_event_date",
+        "_review_recovery",
         "_review_distance",
     ]
-    ascending = [True, True, False, True]
+    ascending = [True, False, True]
     if "Symbol" in sorted_df.columns:
         sort_columns.append("Symbol")
         ascending.append(True)
@@ -367,8 +373,7 @@ def sort_lifecycle_for_review(df, view_key=""):
         .drop(
             columns=[
                 "_review_priority",
-                "_review_change_priority",
-                "_review_event_date",
+                "_review_recovery",
                 "_review_distance",
             ]
         )
@@ -437,7 +442,14 @@ def render_lifecycle_selected_details(selected_row):
     pivot_and_diagnostics = [
         "Also Valid Windows",
         "base_duration_weeks",
+        "base_age_weeks",
+        "base_end_date",
+        "base_end_reason",
         "peak_to_low_weeks",
+        "largest_single_week_move",
+        "largest_single_week_move_date",
+        "largest_single_week_move_to_depth_ratio",
+        "max_single_week_move_to_depth_ratio",
         "pivot_detected",
         "selected_pivot_date",
         "breakout_buffer",
@@ -506,7 +518,12 @@ def render_lifecycle_chart_for_symbol(symbol, result_row=None, max_weeks=None):
     return plot_cup_formation(weekly_df, symbol, chart_params, result_row=result_row)
 
 
-def render_lifecycle_table_with_chart(display_df, key_prefix, source_df=None):
+def render_lifecycle_table_with_chart(
+    display_df,
+    key_prefix,
+    source_df=None,
+    default_columns=None,
+):
     if display_df.empty:
         st.info("No rows available for this view.")
         return
@@ -515,6 +532,7 @@ def render_lifecycle_table_with_chart(display_df, key_prefix, source_df=None):
     selected_columns = selectable_table_columns(
         review_df,
         key=f"{key_prefix}_columns",
+        default_columns=default_columns,
         label="Visible columns",
     )
     table_df = review_df[selected_columns]
@@ -545,6 +563,113 @@ def render_lifecycle_table_with_chart(display_df, key_prefix, source_df=None):
         except Exception as e:
             st.error(f"An error occurred while plotting {selected_symbol}: {e}")
         render_lifecycle_selected_details(selected_row)
+
+
+def load_current_journey_rows():
+    """Combine persistent tracking with the latest discovery snapshot, one row per stock."""
+    tracking_state = load_tracking_state()
+    active_df = ensure_journey_stage(tracking_state.get("active", pd.DataFrame()))
+    latest_df, _all_windows_df, _stage_results = load_lifecycle_saved_state()
+    latest_df = ensure_journey_stage(latest_df)
+
+    sources = []
+    if active_df is not None and not active_df.empty:
+        active_df = active_df.copy()
+        active_df["_journey_source_priority"] = 0
+        sources.append(active_df)
+    if latest_df is not None and not latest_df.empty:
+        latest_df = latest_df.copy()
+        latest_df["_journey_source_priority"] = 1
+        sources.append(latest_df)
+    if not sources:
+        return pd.DataFrame()
+
+    journey_df = pd.concat(sources, ignore_index=True, sort=False)
+    journey_df["Symbol"] = journey_df["Symbol"].astype(str).str.strip()
+    journey_df = (
+        journey_df.sort_values("_journey_source_priority", kind="stable")
+        .drop_duplicates(subset=["Symbol"], keep="first")
+        .drop(columns="_journey_source_priority")
+        .reset_index(drop=True)
+    )
+    return journey_df
+
+
+def render_lifecycle_journey_page(static_df, m_cap):
+    """Render the simplified current journey as exactly three primary tables."""
+    render_lifecycle_control_styles()
+    st.title("Lifecycle Journey")
+    st.caption(
+        "Current stock journey in three review groups. Select a row to open its chart."
+    )
+
+    journey_df = load_current_journey_rows()
+    if journey_df.empty:
+        st.warning("No lifecycle journey data found. Run the replay script first.")
+        return
+
+    visible_stages = [
+        "BREAKOUT_CONSIDERATION",
+        "RECOVERY_BUILDING",
+        "SUCCESSFUL_BREAKOUT",
+    ]
+    journey_df = journey_df[journey_df["journey_stage"].isin(visible_stages)].copy()
+    journey_df = add_lifecycle_display_columns(journey_df, static_df, m_cap)
+
+    counts = journey_df["journey_stage"].value_counts()
+    metric_cols = st.columns(3)
+    metric_cols[0].metric(
+        "Breakout Consideration", int(counts.get("BREAKOUT_CONSIDERATION", 0))
+    )
+    metric_cols[1].metric(
+        "Recovery Building", int(counts.get("RECOVERY_BUILDING", 0))
+    )
+    metric_cols[2].metric(
+        "Successful Breakout", int(counts.get("SUCCESSFUL_BREAKOUT", 0))
+    )
+
+    default_columns = [
+        "Symbol",
+        "recovery_pct",
+        "latest_close",
+        "base_window_weeks",
+        "base_duration_weeks",
+        "Depth",
+        "pivot_source",
+        "selected_pivot",
+        "distance_from_pivot_pct",
+    ]
+    stage_sections = [
+        (
+            "Breakout Consideration",
+            "Stocks at 85%+ recovery or with a confirmed breakout.",
+            "BREAKOUT_CONSIDERATION",
+            "journey_consideration",
+        ),
+        (
+            "Recovery Building",
+            "Stocks currently between 40% and 85% recovery.",
+            "RECOVERY_BUILDING",
+            "journey_recovery",
+        ),
+        (
+            "Successful Breakout",
+            "Stocks that have reached the successful-breakout level.",
+            "SUCCESSFUL_BREAKOUT",
+            "journey_success",
+        ),
+    ]
+
+    for title, caption, stage, key_prefix in stage_sections:
+        stage_df = journey_df[journey_df["journey_stage"] == stage].copy()
+        st.subheader(f"{title} ({len(stage_df)})")
+        st.caption(caption)
+        render_lifecycle_table_with_chart(
+            stage_df,
+            key_prefix,
+            source_df=journey_df,
+            default_columns=default_columns,
+        )
 
 
 def stage_labels():
@@ -608,8 +733,9 @@ def render_review_funnel(stage_results, lifecycle_df):
         stage_default_cols = [
             "Symbol",
             "failure_reason",
-            "lifecycle_status",
-            "current_zone",
+            "journey_stage",
+            "recovery_pct",
+            "base_window_weeks",
             "pivot_source",
             "selected_pivot",
             "distance_from_pivot_pct",
@@ -658,7 +784,8 @@ def render_base_phase_page(static_df, m_cap):
     st.info("Review saved base snapshots. Run scans from the command line while the engine logic is evolving.")
 
     selected_snapshot_date = select_lifecycle_snapshot_date("base_lifecycle_snapshot_date")
-    lifecycle_df, all_windows_df, stage_results = load_lifecycle_saved_state(selected_snapshot_date)
+    lifecycle_df, _all_windows_df, stage_results = load_lifecycle_saved_state(selected_snapshot_date)
+    lifecycle_df = ensure_journey_stage(lifecycle_df)
     if selected_snapshot_date:
         st.caption(f"Showing Base Phase saved snapshot {selected_snapshot_date}.")
 
@@ -668,74 +795,34 @@ def render_base_phase_page(static_df, m_cap):
             render_review_funnel(stage_results, lifecycle_df)
         return
 
-    metric_cols = st.columns(5)
+    metric_cols = st.columns(4)
     metric_cols[0].metric("Candidates", len(lifecycle_df))
-    metric_cols[1].metric("Near Pivot", int((lifecycle_df["lifecycle_status"] == "NEAR_PIVOT").sum()))
-    metric_cols[2].metric("Breakout+", int(lifecycle_df["breakout_date"].notna().sum()))
-    metric_cols[3].metric("Handle Ready", int((lifecycle_df["lifecycle_status"] == "HANDLE_READY").sum()))
-    successful_count = (
-        int(lifecycle_df["breakout_success"].fillna(False).sum())
-        if "breakout_success" in lifecycle_df.columns
-        else 0
-    )
-    metric_cols[4].metric("Successful", successful_count)
+    journey_counts = lifecycle_df.get(
+        "journey_stage", pd.Series(index=lifecycle_df.index, dtype="object")
+    ).value_counts()
+    metric_cols[1].metric("Recovery Building", int(journey_counts.get("RECOVERY_BUILDING", 0)))
+    metric_cols[2].metric("Consideration", int(journey_counts.get("BREAKOUT_CONSIDERATION", 0)))
+    metric_cols[3].metric("Successful", int(journey_counts.get("SUCCESSFUL_BREAKOUT", 0)))
 
     render_review_funnel(stage_results, lifecycle_df)
 
-    filter_col1, filter_col2, filter_col3 = st.columns([3, 1.4, 1.2])
-    with filter_col1:
-        selected_statuses = st.multiselect(
-            "Lifecycle Status",
-            options=sorted(lifecycle_df["lifecycle_status"].dropna().unique()),
-            default=sorted(lifecycle_df["lifecycle_status"].dropna().unique()),
-        )
-    with filter_col2:
-        selected_windows = st.multiselect(
-            "Window",
-            options=sorted(lifecycle_df["scan_window_weeks"].dropna().unique()),
-            default=sorted(lifecycle_df["scan_window_weeks"].dropna().unique()),
-        )
-    with filter_col3:
-        require_pivot = st.checkbox("Pivot detected only", value=True)
+    available_stages = sorted(lifecycle_df["journey_stage"].dropna().unique())
+    selected_stages = st.multiselect(
+        "Journey Stage",
+        options=available_stages,
+        default=available_stages,
+        key="base_phase_journey_stages",
+    )
 
     display_df = lifecycle_df.copy()
-    if selected_statuses:
-        display_df = display_df[display_df["lifecycle_status"].isin(selected_statuses)]
-    if selected_windows:
-        display_df = display_df[display_df["scan_window_weeks"].isin(selected_windows)]
-    if require_pivot:
-        display_df = display_df[display_df["pivot_detected"] == True]
+    if selected_stages:
+        display_df = display_df[display_df["journey_stage"].isin(selected_stages)]
 
     display_df = add_lifecycle_display_columns(display_df, static_df, m_cap)
 
     st.caption(f"Showing {len(display_df)} lifecycle candidates after UI filters.")
     render_lifecycle_table_with_chart(display_df, "base_phase", source_df=lifecycle_df)
 
-    if not all_windows_df.empty:
-        with st.expander("All Window Results"):
-            sorted_all_windows_df = sort_lifecycle_for_review(
-                all_windows_df,
-                view_key="base_phase_all_windows",
-            )
-            all_window_columns = selectable_table_columns(
-                sorted_all_windows_df,
-                key="base_phase_all_windows_columns",
-                default_columns=[
-                    "Symbol",
-                    "scan_window_weeks",
-                    "lifecycle_status",
-                    "pivot_source",
-                    "selected_pivot",
-                    "distance_from_pivot_pct",
-                ],
-                label="Visible all-window columns",
-            )
-            st.dataframe(
-                sorted_all_windows_df[all_window_columns],
-                use_container_width=True,
-                hide_index=True,
-                column_config=compact_table_column_config(all_window_columns),
-            )
 
 
 def render_tracking_phase_page(static_df, m_cap):
@@ -747,38 +834,14 @@ def render_tracking_phase_page(static_df, m_cap):
     active_tracking_df = tracking_state.get("active", pd.DataFrame())
     history_tracking_df = tracking_state.get("history", pd.DataFrame())
     archived_tracking_df = tracking_state.get("archived", pd.DataFrame())
+    active_tracking_df = ensure_journey_stage(active_tracking_df)
+    history_tracking_df = ensure_journey_stage(history_tracking_df)
+    archived_tracking_df = ensure_journey_stage(archived_tracking_df)
 
-    available_windows = sorted(
-        {
-            int(window)
-            for frame in [active_tracking_df, history_tracking_df, archived_tracking_df]
-            if "scan_window_weeks" in frame.columns
-            for window in pd.to_numeric(
-                frame["scan_window_weeks"], errors="coerce"
-            ).dropna().unique()
-        }
-    )
-    selected_windows = st.multiselect(
-        "Base Window",
-        options=available_windows,
-        default=available_windows,
-        key="tracking_base_windows",
-        help="Filter Active, History, and Archived tracking rows by the original base window.",
-    )
-
-    def filter_tracking_windows(frame):
-        if (
-            frame.empty
-            or not selected_windows
-            or "scan_window_weeks" not in frame.columns
-        ):
-            return frame
-        numeric_windows = pd.to_numeric(frame["scan_window_weeks"], errors="coerce")
-        return frame[numeric_windows.isin(selected_windows)].copy()
-
-    active_tracking_df = filter_tracking_windows(active_tracking_df)
-    history_tracking_df = filter_tracking_windows(history_tracking_df)
-    archived_tracking_df = filter_tracking_windows(archived_tracking_df)
+    if "journey_stage" in active_tracking_df.columns:
+        active_tracking_df = active_tracking_df[
+            active_tracking_df["journey_stage"] != "NOT_TRACKED"
+        ].copy()
 
     metric_cols = st.columns(3)
     metric_cols[0].metric("Active Bases", len(active_tracking_df))
@@ -804,6 +867,5 @@ def render_tracking_phase_page(static_df, m_cap):
                 frame,
                 static_df,
                 m_cap,
-                frame if label == "Active" else None,
             )
             render_lifecycle_table_with_chart(display_df, f"tracking_{label.lower()}", source_df=frame)

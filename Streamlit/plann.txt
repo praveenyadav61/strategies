@@ -1,0 +1,591 @@
+BASE LIFECYCLE STRATEGY — CURRENT LOGIC
+
+1. DATA FREQUENCY
+
+1.1 Daily candles are the source data.
+
+1.2 Completed weekly candles are used for:
+- Base structure
+- Left high
+- Base low
+- Base depth
+- Prior uptrend
+- Handle
+- Pivot
+- Breakout confirmation
+- Breakout success
+- Breakout failure
+
+1.3 The latest daily close is used for:
+- Recovery percentage
+- Distance from pivot
+- Current journey-stage movement
+
+1.4 Monday through Thursday reuse the previous completed Friday structure.
+
+1.5 Friday includes the newly completed weekly candle and refreshes the weekly structure.
+
+1.6 Daily replay processes business days and skips Saturdays and Sundays.
+
+
+2. DAILY TREND GATE
+
+A stock proceeds to base detection only when:
+
+latest daily close > daily EMA200
+daily EMA50 > daily EMA200
+
+
+3. BASE-WINDOW SELECTION
+
+3.1 Each stock is searched automatically in this order:
+
+104 weeks
+52 weeks
+26 weeks
+
+3.2 The first structurally valid window is selected.
+
+3.3 The scanner stops searching smaller windows after finding a valid larger window.
+
+3.4 Each stock has at most one canonical current base.
+
+
+4. LEFT-HIGH DETECTION
+
+4.1 The latest 12 weekly candles are excluded from the left-high search.
+
+4.2 The left high is:
+
+left_high = highest weekly High in the remaining selected window
+
+4.3 Excluding the latest 12 weeks ensures the prospective base has enough time to develop.
+
+
+5. BASE-LOW DETECTION
+
+5.1 The base low is:
+
+base_low = lowest weekly Low after the left high
+
+5.2 The base low must occur at least four weeks after the left high:
+
+peak_to_low_weeks >= 4
+
+
+6. BASE-DEPTH CONDITION
+
+Base depth is:
+
+base_depth = (left_high - base_low) / left_high
+
+Required range:
+
+15% <= base_depth <= 60%
+
+
+7. PRIOR-UPTREND CONDITION
+
+7.1 A valid base requires an uptrend before the left high.
+
+7.2 Prior-uptrend percentage is:
+
+prior_uptrend_pct =
+    (left_high - prior_low) / prior_low
+
+7.3 Required prior uptrend:
+
+minimum_prior_uptrend =
+    max(20%, base_depth)
+
+7.4 The prior low must occur at least four weeks before the left high.
+
+7.5 Prior-uptrend lookback scales with the selected window:
+
+104-week window → up to 52 weeks
+52-week window  → approximately 26 weeks
+26-week window  → approximately 13 weeks
+
+7.6 Minimum prior-uptrend lookback is 12 weeks.
+
+7.7 Maximum prior-uptrend lookback is 52 weeks.
+
+
+8. ACTUAL BASE-WIDTH CONDITION
+
+8.1 Search window and actual base width are different values.
+
+8.2 Actual base width is measured from the left-high date to the structural right edge.
+
+8.3 Structural right-edge priority:
+
+If a distinct valid handle exists:
+    base_end_date = handle pivot date
+    base_end_reason = HANDLE_PIVOT
+
+Else if a breakout was confirmed:
+    base_end_date = breakout date
+    base_end_reason = BREAKOUT
+
+Else:
+    base_end_date = latest completed weekly candle
+    base_end_reason = CURRENT_STRUCTURE
+
+8.4 A fallback left-high pivot is not considered a new right edge.
+
+8.5 Actual base duration is:
+
+base_duration_weeks =
+    weeks between left_high_date and base_end_date
+
+8.6 Required minimum:
+
+base_duration_weeks >= 12
+
+8.7 The 104-week search window provides the implicit maximum base age.
+
+
+9. SINGLE-WEEK MOVE CONDITION
+
+9.1 A base is rejected when one abnormal weekly move represents more than 50% of the total base depth.
+
+9.2 Weekly true range is:
+
+weekly_true_range = max(
+    weekly High - weekly Low,
+    abs(weekly High - previous weekly Close),
+    abs(weekly Low - previous weekly Close)
+)
+
+9.3 Total base depth in price is:
+
+base_depth_price = left_high - base_low
+
+9.4 Required condition:
+
+largest_weekly_true_range / base_depth_price <= 50%
+
+9.5 The confirmed breakout candle is excluded from this calculation.
+
+9.6 This prevents a powerful breakout candle from invalidating the preceding base.
+
+9.7 Saved diagnostic fields:
+
+largest_single_week_move
+largest_single_week_move_date
+largest_single_week_move_to_depth_ratio
+max_single_week_move_to_depth_ratio
+
+
+10. RECOVERY CALCULATION
+
+Recovery uses the latest daily close:
+
+recovery_pct =
+    (latest_daily_close - base_low) /
+    (left_high - base_low)
+
+Recovery is not capped at 100%.
+
+Recovery can exceed 100% after price moves above the left high.
+
+
+11. RECOVERY AND VISIBILITY THRESHOLDS
+
+If recovery_pct < 40%:
+    journey_stage = NOT_TRACKED
+
+If 40% <= recovery_pct < 85%:
+    journey_stage = RECOVERY_BUILDING
+
+If recovery_pct >= 85%:
+    journey_stage = BREAKOUT_CONSIDERATION
+
+Recovery has no hard upper limit.
+
+Price-versus-pivot rules take priority after breakout.
+
+
+12. BELOW-40% STRUCTURES
+
+12.1 A structurally valid base below 40% recovery remains the canonical structural base for that scan.
+
+12.2 It does not fall through to a smaller search window.
+
+12.3 It is assigned:
+
+journey_stage = NOT_TRACKED
+
+12.4 It is not shown on the simplified Lifecycle Journey page.
+
+12.5 It is not added as a new active tracking candidate.
+
+12.6 It is scanned again on later business days.
+
+12.7 When recovery reaches 40%, it can enter active tracking.
+
+
+13. TRACKING ENTRY
+
+13.1 A valid base enters active tracking when:
+
+recovery_pct >= 40%
+
+13.2 A stable base identifier is created as:
+
+base_id =
+    Symbol
+    + left_high_date
+    + base_low_date
+
+13.3 Pivot is not included in base_id.
+
+13.4 Pivot is excluded because a handle can form, change or become invalid while the underlying base remains the same.
+
+
+14. PIVOT SELECTION
+
+14.1 Only two actionable pivot sources are used:
+
+- Left-high pivot
+- Valid handle pivot
+
+14.2 Selection:
+
+If a valid distinct handle exists:
+    selected_pivot = handle_high
+    pivot_source = HANDLE
+
+Otherwise:
+    selected_pivot = left_high
+    pivot_source = LEFT_HIGH
+
+14.3 If the handle pivot is within 2% of the left high:
+
+pivot_source = LEFT_HIGH_HANDLE_MERGED
+selected_pivot = left_high
+
+14.4 Range-high, close-high, resistance-cluster and scored swing pivots are not used.
+
+
+15. HANDLE CONDITIONS
+
+15.1 Handle lookback:
+
+10 completed weekly candles
+
+15.2 Minimum handle pullback:
+
+3%
+
+15.3 Maximum handle pullback:
+
+handle_max_pullback_pct = base_depth / 3
+
+15.4 Minimum handle duration:
+
+2 weeks
+
+15.5 Valid handle-high range:
+
+85% to 105% of the left high
+
+15.6 A selected handle is invalidated before breakout if price closes below its handle low.
+
+15.7 When invalidated, pivot selection returns to the left high.
+
+
+16. BREAKOUT CONFIRMATION
+
+16.1 Breakout buffer:
+
+breakout_buffer = max(
+    0.5% of selected_pivot,
+    0.20 × setup weekly ATR
+)
+
+16.2 Confirmation level:
+
+confirmation_level =
+    selected_pivot + breakout_buffer
+
+16.3 Breakout crossing:
+
+previous weekly close <= confirmation_level
+current weekly close  > confirmation_level
+
+16.4 The first weekly candle after the base low is eligible to confirm a fallback left-high breakout.
+
+16.5 The first qualifying crossing sets:
+
+breakout_date
+breakout_close
+breakout_confirmed = True
+
+16.6 At confirmation, the following values freeze:
+
+selected_pivot
+pivot_source
+setup ATR
+breakout buffer
+confirmation level
+breakout date
+breakout range
+failure level
+success level
+
+
+17. POST-BREAKOUT RANGE
+
+The selected pivot creates a fixed range:
+
+breakout_range_low =
+    selected_pivot × 0.90
+
+breakout_range_high =
+    selected_pivot × 1.10
+
+Current zones:
+
+close < range_low
+    → BELOW_RANGE
+
+range_low <= close < selected_pivot
+    → RETEST_RANGE
+
+selected_pivot <= close <= range_high
+    → BUY_RANGE
+
+close > range_high
+    → ABOVE_BUY_RANGE
+
+
+18. SUCCESSFUL BREAKOUT
+
+18.1 Success level is:
+
+success_level = max(
+    selected_pivot × 1.10,
+    left_high + left_high_confirmation_buffer
+)
+
+18.2 The left-high requirement prevents a lower handle pivot from declaring success while price remains below the old left-high resistance.
+
+18.3 Successful breakout occurs when:
+
+post-breakout weekly close > success_level
+
+18.4 On the first qualifying candle:
+
+breakout_success = True
+breakout_success_date = qualifying weekly date
+journey_stage = SUCCESSFUL_BREAKOUT
+
+18.5 Success is historical and latched.
+
+18.6 A later pullback does not erase the successful-breakout event.
+
+
+19. BREAKOUT FAILURE
+
+19.1 Failure buffer:
+
+failure_buffer = max(
+    1% of selected_pivot,
+    0.25 × frozen setup weekly ATR
+)
+
+19.2 Hard-failure level:
+
+hard_failure_level =
+    breakout_range_low - failure_buffer
+
+19.3 A confirmed breakout fails when either condition occurs:
+
+Condition A:
+    one weekly close < hard_failure_level
+
+Condition B:
+    two consecutive weekly closes < breakout_range_low
+
+19.4 One marginal close below breakout_range_low but above hard_failure_level is only a range-breach warning.
+
+19.5 On failure:
+
+journey_stage = FAILED
+tracking_state = ARCHIVED
+
+
+20. JOURNEY-STAGE PRIORITY
+
+The primary stage decision is:
+
+if failed:
+    journey_stage = FAILED
+
+elif breakout_success:
+    journey_stage = SUCCESSFUL_BREAKOUT
+
+elif breakout_confirmed:
+    journey_stage = BREAKOUT_CONSIDERATION
+
+elif recovery_pct >= 85%:
+    journey_stage = BREAKOUT_CONSIDERATION
+
+elif recovery_pct >= 40%:
+    journey_stage = RECOVERY_BUILDING
+
+else:
+    journey_stage = NOT_TRACKED
+
+
+21. REVERSIBLE RECOVERY TRANSITIONS
+
+Before breakout confirmation, recovery stages are reversible.
+
+Example:
+
+Recovery reaches 87%
+    → BREAKOUT_CONSIDERATION
+
+Recovery falls to 78%
+    → RECOVERY_BUILDING
+
+Recovery falls to 35%
+    → NOT_TRACKED
+
+Recovery returns to 45%
+    → RECOVERY_BUILDING
+
+No manual movement is required.
+
+
+22. LATCHED HISTORICAL TRANSITIONS
+
+The following outcomes are historical and cannot be erased by ordinary recovery movement:
+
+- Confirmed breakout
+- Successful breakout
+- Failed breakout
+
+After confirmation, a fall in recovery cannot move the stock back to RECOVERY_BUILDING.
+
+After success, a pullback cannot erase SUCCESSFUL_BREAKOUT.
+
+Failure has the highest stage priority.
+
+
+23. DAILY TRACKING UPDATE
+
+Every processed business day:
+
+1. Load prices through the replay date.
+2. Use the latest daily close for recovery.
+3. Use the latest daily close for pivot distance.
+4. Reuse the latest completed weekly structure.
+5. Recalculate the primary journey stage.
+6. Append one dated tracking-history row.
+7. Keep the base active unless it reaches FAILED.
+
+
+24. FRIDAY STRUCTURE UPDATE
+
+On Friday:
+
+1. Include the newly completed weekly candle.
+2. Re-evaluate handle formation.
+3. Re-evaluate pivot selection before breakout.
+4. Detect buffered breakout crossing.
+5. Detect successful breakout.
+6. Detect range breach or failure.
+7. Update the saved tracking state.
+
+
+25. NEW BASES ENTERING TRACKING
+
+On every fresh scan:
+
+1. Scan each stock in 104/52/26 order.
+2. Keep its largest structurally valid base.
+3. Calculate recovery from the latest daily close.
+4. Ignore new tracking entry below 40%.
+5. Build base_id for a 40%+ candidate.
+6. Check active and archived tracking data.
+7. Add the row when base_id is new and the symbol has no active base.
+8. Update every active row from current price data.
+9. Append updated rows to tracking history.
+
+
+26. TRACKING CONTINUITY
+
+26.1 Once a base enters active tracking, it continues to be updated even when it no longer passes fresh base discovery.
+
+26.2 This preserves breakout, success, pullback and failure history.
+
+26.3 Falling below 40% does not remove the row from active storage.
+
+26.4 A below-40% active row is hidden from Lifecycle Journey but remains available for later recovery.
+
+26.5 Only FAILED currently moves a tracked base to archived storage.
+
+
+27. DUPLICATE PREVENTION
+
+27.1 Only one active base is currently allowed per symbol.
+
+27.2 The same base_id cannot be added twice.
+
+27.3 An archived base_id cannot be re-added.
+
+27.4 A different base_id can enter after the previous active base has been archived.
+
+
+28. CURRENT NEW-BASE LIMITATION
+
+28.1 If a symbol already has an active base, a newly detected base for the same symbol is ignored.
+
+28.2 This affects stocks that successfully break out and later form another base.
+
+28.3 SUCCESSFUL_BREAKOUT currently remains active indefinitely unless it later fails.
+
+28.4 Therefore, a second base cannot enter while the older successful base remains active.
+
+28.5 Required future improvement:
+
+SUCCESSFUL_BREAKOUT
+    → retain for a defined post-success period
+    → move old lifecycle to COMPLETED
+    → permit a new base_id for the same symbol
+
+
+29. LIFECYCLE JOURNEY PAGE
+
+The simplified page displays three current tables:
+
+1. BREAKOUT_CONSIDERATION
+2. RECOVERY_BUILDING
+3. SUCCESSFUL_BREAKOUT
+
+FAILED is excluded from this page.
+
+NOT_TRACKED is excluded from this page.
+
+Base Phase and Tracking Phase remain available for detailed diagnosis.
+
+
+30. NON-HARD INFORMATIONAL FIELDS
+
+The following are calculated but do not determine base acceptance:
+
+- Compression
+- Tight groups
+- Pivot proximity
+- Breakout volume ratio
+- Gain since breakout
+- Maximum post-breakout gain
+- Maximum drawdown
+- Pullback from post-breakout high
+- Score
+- Rank
+
+Score and rank are not currently used.

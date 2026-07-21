@@ -37,20 +37,24 @@ STAGE_KEYS = [
 
 DEFAULT_PARAMS = {
     "MIN_WEEKS": 8,
-    "MAX_WEEKS": 52,
-    "BASE_WINDOWS": [26, 52, 104],
+    "MIN_BASE_DURATION_WEEKS": 12,
+    "MAX_WEEKS": 104,
+    "BASE_WINDOWS": [104, 52, 26],
     "MIN_WEEKLY_BARS_REQUIRED": 10,
     "MIN_DEPTH": 0.15,
     "MAX_DEPTH": 0.60,
-    "RECOVERY_MIN": 0.60,
-    "TRACKING_ELIGIBLE_RECOVERY_MIN": 0.85,
+    "MAX_SINGLE_WEEK_MOVE_TO_DEPTH_RATIO": 0.50,
+    "RECOVERY_MIN": 0.40,
+    "TRACKING_ELIGIBLE_RECOVERY_MIN": 0.40,
+    "BREAKOUT_CONSIDERATION_RECOVERY_MIN": 0.85,
+    "STRATEGY_VERSION": "base_lifecycle_v2",
     "MIN_PRIOR_UPTREND_PCT": 0.20,
     "PRIOR_UPTREND_DEPTH_MULTIPLIER": 1.0,
     "PRIOR_UPTREND_LOOKBACK_RATIO": 0.50,
     "PRIOR_UPTREND_MIN_LOOKBACK_WEEKS": 12,
     "PRIOR_UPTREND_MAX_LOOKBACK_WEEKS": 52,
     "PRIOR_UPTREND_MIN_ADVANCE_WEEKS": 4,
-    "MIN_PEAK_TO_LOW_WEEKS": 1,
+    "MIN_PEAK_TO_LOW_WEEKS": 4,
     "ATR_WINDOW": 14,
     "COMPRESSION_LOOKBACK": 10,
     "TRACKING_HANDLE_LOOKBACK_WEEKS": 10,
@@ -68,6 +72,28 @@ DEFAULT_PARAMS = {
 }
 
 
+def determine_journey_stage(
+    recovery_pct,
+    breakout_confirmed=False,
+    breakout_success=False,
+    failed=False,
+    discovery_recovery_min=0.40,
+    consideration_recovery_min=0.85,
+):
+    """Return the primary lifecycle stage while preserving historical outcomes."""
+    if bool(failed):
+        return "FAILED"
+    if bool(breakout_success):
+        return "SUCCESSFUL_BREAKOUT"
+    if bool(breakout_confirmed):
+        return "BREAKOUT_CONSIDERATION"
+    if pd.notna(recovery_pct) and float(recovery_pct) >= float(consideration_recovery_min):
+        return "BREAKOUT_CONSIDERATION"
+    if pd.notna(recovery_pct) and float(recovery_pct) >= float(discovery_recovery_min):
+        return "RECOVERY_BUILDING"
+    return "NOT_TRACKED"
+
+
 def get_logger(debug=False):
     level = logging.DEBUG if debug else logging.ERROR
     logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -76,6 +102,102 @@ def get_logger(debug=False):
 
 def normalize_stock_symbol(symbol):
     return str(symbol).strip().removesuffix(".NS")
+
+
+def latest_completed_week_end(as_of_date):
+    """Return the Friday whose completed weekly candle is valid as of a signal date."""
+    signal_date = pd.to_datetime(as_of_date).normalize()
+    days_since_friday = (signal_date.weekday() - 4) % 7
+    return signal_date - pd.Timedelta(days=days_since_friday)
+
+
+def resample_completed_weekly(daily_df, as_of_date=None):
+    """Build Friday-labelled weekly bars and exclude the incomplete current week."""
+    if daily_df is None or daily_df.empty:
+        return pd.DataFrame()
+    weekly = daily_df.resample("W-FRI").agg(
+        {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    ).dropna()
+    cutoff = pd.to_datetime(as_of_date if as_of_date is not None else daily_df.index[-1])
+    return weekly[weekly.index <= cutoff].copy()
+
+
+def ordered_base_windows(params):
+    """Return unique base windows in largest-first discovery order."""
+    return sorted(
+        {int(window) for window in params.get("BASE_WINDOWS", [104, 52, 26])},
+        reverse=True,
+    )
+
+
+def resolve_base_end(left_high_date, pivot_lifecycle, current_structure_date):
+    """Resolve the structural right edge used to measure actual base width."""
+    left_high_date = pd.to_datetime(left_high_date, errors="coerce")
+    current_structure_date = pd.to_datetime(current_structure_date, errors="coerce")
+    pivot_source = pivot_lifecycle.get("pivot_source")
+    pivot_date = pd.to_datetime(
+        pivot_lifecycle.get("selected_pivot_date"), errors="coerce"
+    )
+    breakout_date = pd.to_datetime(
+        pivot_lifecycle.get("breakout_date"), errors="coerce"
+    )
+
+    if (
+        pivot_source == "HANDLE"
+        and pd.notna(pivot_date)
+        and pd.notna(left_high_date)
+        and pivot_date > left_high_date
+    ):
+        return pivot_date, "HANDLE_PIVOT"
+    if (
+        pd.notna(breakout_date)
+        and pd.notna(left_high_date)
+        and breakout_date > left_high_date
+    ):
+        return breakout_date, "BREAKOUT"
+    return current_structure_date, "CURRENT_STRUCTURE"
+
+
+def calculate_single_week_move_metrics(
+    base_window,
+    base_depth_price,
+    excluded_end_date=None,
+):
+    """Measure the largest weekly true range as a share of total base depth."""
+    if base_window is None or base_window.empty or base_depth_price <= 0:
+        return {
+            "largest_single_week_move": np.nan,
+            "largest_single_week_move_date": pd.NaT,
+            "largest_single_week_move_to_depth_ratio": np.nan,
+        }
+
+    measured = base_window.copy()
+    excluded_end_date = pd.to_datetime(excluded_end_date, errors="coerce")
+    if pd.notna(excluded_end_date):
+        measured = measured[measured.index < excluded_end_date]
+    if measured.empty:
+        return {
+            "largest_single_week_move": np.nan,
+            "largest_single_week_move_date": pd.NaT,
+            "largest_single_week_move_to_depth_ratio": np.nan,
+        }
+
+    previous_close = measured["Close"].shift(1)
+    true_range = pd.concat(
+        [
+            measured["High"] - measured["Low"],
+            (measured["High"] - previous_close).abs(),
+            (measured["Low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    largest_date = true_range.idxmax()
+    largest_move = float(true_range.loc[largest_date])
+    return {
+        "largest_single_week_move": largest_move,
+        "largest_single_week_move_date": largest_date,
+        "largest_single_week_move_to_depth_ratio": largest_move / float(base_depth_price),
+    }
 
 
 def empty_stage_results():
@@ -202,49 +324,35 @@ def build_setup_reason(row):
     return ", ".join(parts)
 
 
-def calculate_base_score(
-    depth,
-    recovery_pct,
-    distance_from_pivot_pct,
-    prior_uptrend,
-    compression,
-    tight_groups,
-    pivot_detected,
+def check_lifecycle_conditions(
+    df,
+    params,
+    symbol,
+    stats,
+    logger,
+    ath,
+    scan_window_weeks,
+    stage_results=None,
+    signal_close=None,
+    signal_as_of_date=None,
 ):
-    score = 0.0
-    score += min(max(recovery_pct, 0.0), 1.5) / 1.5 * 25.0
-
-    depth_quality = max(0.0, 1.0 - abs(depth - 0.30) / 0.30)
-    score += depth_quality * 20.0
-
-    if distance_from_pivot_pct <= 0:
-        score += max(0.0, 1.0 - abs(distance_from_pivot_pct) / 0.15) * 20.0
-    else:
-        score += max(0.0, 1.0 - distance_from_pivot_pct / 0.25) * 15.0
-
-    if prior_uptrend:
-        score += 10.0
-    if compression:
-        score += 10.0
-    if tight_groups:
-        score += 5.0
-    if pivot_detected:
-        score += 10.0
-
-    return round(min(score, 100.0), 2)
-
-
-def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_window_weeks, stage_results=None):
     try:
         stock_symbol = normalize_stock_symbol(symbol)
         window = df.tail(scan_window_weeks).copy()
-        latest_close = float(window["Close"].iloc[-1])
+        weekly_structure_close = float(window["Close"].iloc[-1])
+        latest_close = (
+            float(signal_close)
+            if signal_close is not None and pd.notna(signal_close)
+            else weekly_structure_close
+        )
         base_stage_row = {
             "Symbol": stock_symbol,
             "scan_window_weeks": int(scan_window_weeks),
             "latest_close": latest_close,
         }
-        peak_search_window = window.iloc[:-params["MIN_WEEKS"]]
+        minimum_base_duration = int(params.get("MIN_BASE_DURATION_WEEKS", 12))
+        peak_exclusion_weeks = max(int(params["MIN_WEEKS"]), minimum_base_duration)
+        peak_search_window = window.iloc[:-peak_exclusion_weeks]
         if peak_search_window.empty:
             record_stage(
                 stage_results,
@@ -258,7 +366,7 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
         after_peak = window.loc[peak_idx:]
         bottom_idx = after_peak["Low"].idxmin()
         bottom_price = after_peak.loc[bottom_idx, "Low"]
-        base_duration_weeks = (window.index[-1] - peak_idx).days / 7
+        base_age_weeks = (window.index[-1] - peak_idx).days / 7
         peak_to_low_weeks = (bottom_idx - peak_idx).days / 7
         evaluated_row = {
             **base_stage_row,
@@ -266,21 +374,21 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
             "left_high_index": peak_idx,
             "base_low": float(bottom_price),
             "base_low_index": bottom_idx,
-            "base_duration_weeks": round(float(base_duration_weeks), 1),
+            "base_age_weeks": round(float(base_age_weeks), 1),
             "peak_to_low_weeks": round(float(peak_to_low_weeks), 1),
             "ATH": float(ath),
         }
 
         stats.ath_filtered.append(symbol)
 
-        if peak_to_low_weeks < params.get("MIN_PEAK_TO_LOW_WEEKS", 1):
+        if peak_to_low_weeks < params.get("MIN_PEAK_TO_LOW_WEEKS", 4):
             record_stage(
                 stage_results,
                 "rejected",
                 {
                     **evaluated_row,
                     "failure_reason": "base_low_too_close_to_left_high",
-                    "min_peak_to_low_weeks": float(params.get("MIN_PEAK_TO_LOW_WEEKS", 1)),
+                    "min_peak_to_low_weeks": float(params.get("MIN_PEAK_TO_LOW_WEEKS", 4)),
                 },
             )
             return None
@@ -305,8 +413,9 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
 
         stats.duration.append(symbol)
 
-        recovery_pct = (window["Close"].iloc[-1] - bottom_price) / (peak_price - bottom_price)
-        if recovery_pct < params["RECOVERY_MIN"]:
+        recovery_pct = (latest_close - bottom_price) / (peak_price - bottom_price)
+        meets_discovery_recovery = recovery_pct >= params["RECOVERY_MIN"]
+        if not meets_discovery_recovery:
             record_stage(
                 stage_results,
                 "rejected",
@@ -318,13 +427,13 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
                     "recovery_min": float(params["RECOVERY_MIN"]),
                 },
             )
-            return None
-        stats.recovery.append(symbol)
-        record_stage(
-            stage_results,
-            "recovery_passed",
-            {**evaluated_row, "Depth": float(depth), "recovery_pct": float(recovery_pct)},
-        )
+        else:
+            stats.recovery.append(symbol)
+            record_stage(
+                stage_results,
+                "recovery_passed",
+                {**evaluated_row, "Depth": float(depth), "recovery_pct": float(recovery_pct)},
+            )
 
         atr = window["atr"]
         compression = atr.iloc[-params["COMPRESSION_LOOKBACK"]:].mean() < atr.quantile(0.3)
@@ -376,7 +485,7 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
             },
         )
 
-        tracking_eligible = bool(recovery_pct >= params.get("TRACKING_ELIGIBLE_RECOVERY_MIN", 0.85))
+        tracking_eligible = bool(recovery_pct >= params.get("TRACKING_ELIGIBLE_RECOVERY_MIN", 0.40))
         pivot_lifecycle = calculate_pivot_lifecycle(
             window,
             float(peak_price),
@@ -386,6 +495,58 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
             params,
             tracking_eligible=tracking_eligible,
         )
+        base_end_date, base_end_reason = resolve_base_end(
+            peak_idx,
+            pivot_lifecycle,
+            window.index[-1],
+        )
+        base_duration_weeks = (base_end_date - peak_idx).days / 7
+        if base_duration_weeks < minimum_base_duration:
+            record_stage(
+                stage_results,
+                "rejected",
+                {
+                    **evaluated_row,
+                    "Depth": float(depth),
+                    "base_age_weeks": round(float(base_age_weeks), 1),
+                    "base_duration_weeks": round(float(base_duration_weeks), 1),
+                    "base_end_date": base_end_date,
+                    "base_end_reason": base_end_reason,
+                    "failure_reason": "base_duration_too_short",
+                    "min_base_duration_weeks": minimum_base_duration,
+                },
+            )
+            return None
+        base_move_window = window.loc[peak_idx:base_end_date].copy()
+        single_week_metrics = calculate_single_week_move_metrics(
+            base_move_window,
+            float(peak_price - bottom_price),
+            excluded_end_date=(
+                base_end_date if base_end_reason == "BREAKOUT" else None
+            ),
+        )
+        largest_move_ratio = single_week_metrics[
+            "largest_single_week_move_to_depth_ratio"
+        ]
+        max_single_week_ratio = float(
+            params.get("MAX_SINGLE_WEEK_MOVE_TO_DEPTH_RATIO", 0.50)
+        )
+        if pd.notna(largest_move_ratio) and largest_move_ratio > max_single_week_ratio:
+            record_stage(
+                stage_results,
+                "rejected",
+                {
+                    **evaluated_row,
+                    "Depth": float(depth),
+                    "base_duration_weeks": round(float(base_duration_weeks), 1),
+                    "base_end_date": base_end_date,
+                    "base_end_reason": base_end_reason,
+                    **single_week_metrics,
+                    "failure_reason": "single_week_move_too_large",
+                    "max_single_week_move_to_depth_ratio": max_single_week_ratio,
+                },
+            )
+            return None
         pivot = float(pivot_lifecycle["selected_pivot"])
         pivot_date = pd.to_datetime(pivot_lifecycle.get("selected_pivot_date"), errors="coerce")
         pivot_idx_i = (
@@ -395,7 +556,20 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
         )
         pivot_detected = bool(pivot_lifecycle.get("pivot_source") != "LEFT_HIGH")
         distance_from_left_high_pct = (latest_close - peak_price) / peak_price
-        distance_from_pivot_pct = float(pivot_lifecycle["distance_from_pivot_pct"])
+        distance_from_pivot_pct = (latest_close - pivot) / pivot
+        failed = bool(pivot_lifecycle.get("lifecycle_phase") == "FAILED")
+        breakout_confirmed = bool(pd.notna(pivot_lifecycle.get("breakout_date")))
+        breakout_success = bool(pivot_lifecycle.get("breakout_success", False))
+        journey_stage = determine_journey_stage(
+            recovery_pct,
+            breakout_confirmed=breakout_confirmed,
+            breakout_success=breakout_success,
+            failed=failed,
+            discovery_recovery_min=params.get("RECOVERY_MIN", 0.40),
+            consideration_recovery_min=params.get(
+                "BREAKOUT_CONSIDERATION_RECOVERY_MIN", 0.85
+            ),
+        )
         pivot_row = {
             **evaluated_row,
             "Depth": float(depth),
@@ -416,20 +590,15 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
         }
         record_stage(stage_results, "pivot_evaluated", pivot_row)
 
-        score = calculate_base_score(
-            depth,
-            recovery_pct,
-            distance_from_pivot_pct,
-            prior_uptrend,
-            compression,
-            tight_groups,
-            pivot_detected,
-        )
-
         result = {
             "Symbol": stock_symbol,
             "scan_window_weeks": int(scan_window_weeks),
             "base_duration_weeks": round(float(base_duration_weeks), 1),
+            "base_age_weeks": round(float(base_age_weeks), 1),
+            "base_end_date": base_end_date,
+            "base_end_reason": base_end_reason,
+            **single_week_metrics,
+            "max_single_week_move_to_depth_ratio": max_single_week_ratio,
             "Depth": float(depth),
             "recovery_pct": float(recovery_pct),
             "distance_from_left_high_pct": float(distance_from_left_high_pct),
@@ -452,14 +621,35 @@ def check_lifecycle_conditions(df, params, symbol, stats, logger, ath, scan_wind
             "base_low": float(bottom_price),
             "base_low_index": bottom_idx,
             "peak_to_low_weeks": round(float(peak_to_low_weeks), 1),
-            "score": float(score),
-            "tracking_eligible_recovery_min": float(params.get("TRACKING_ELIGIBLE_RECOVERY_MIN", 0.85)),
+            "latest_close": float(latest_close),
+            "weekly_structure_close": float(weekly_structure_close),
+            "structure_as_of_date": window.index[-1],
+            "signal_as_of_date": pd.to_datetime(signal_as_of_date, errors="coerce"),
+            "journey_stage": journey_stage,
+            "strategy_version": params.get("STRATEGY_VERSION", "base_lifecycle_v2"),
+            "base_window_weeks": int(scan_window_weeks),
+            "tracking_eligible_recovery_min": float(params.get("TRACKING_ELIGIBLE_RECOVERY_MIN", 0.40)),
             "tracking_eligible": tracking_eligible,
             "ATH": float(ath),
             **pivot_lifecycle,
         }
+        pivot_row.update(
+            {
+                "latest_close": float(latest_close),
+                "distance_from_left_high_pct": float(distance_from_left_high_pct),
+                "distance_from_pivot_pct": float(distance_from_pivot_pct),
+                "journey_stage": journey_stage,
+                "base_window_weeks": int(scan_window_weeks),
+            }
+        )
+        result["distance_from_left_high_pct"] = float(distance_from_left_high_pct)
+        result["distance_from_pivot_pct"] = float(distance_from_pivot_pct)
         result["setup_reason"] = build_setup_reason(result)
-        record_stage(stage_results, "final_candidates", result)
+        # A structurally valid largest window remains canonical even below 40%.
+        # It is deliberately kept out of the visible candidate table until its
+        # daily-close recovery enters the tracked journey.
+        if journey_stage != "NOT_TRACKED":
+            record_stage(stage_results, "final_candidates", result)
         return result
 
     except Exception as exc:
@@ -501,7 +691,6 @@ def load_previous_snapshot(scan_dir=SCAN_HISTORY_DIR, current_date_label=None):
 def compare_snapshots(current_df, previous_df):
     current = current_df.copy()
     current["weekly_change"] = "New"
-    current["score_delta"] = pd.NA
 
     if previous_df.empty or "Symbol" not in previous_df.columns:
         return current, pd.DataFrame()
@@ -518,23 +707,10 @@ def compare_snapshots(current_df, previous_df):
             continue
 
         prev_row = previous.loc[symbol]
-        current_score = row.get("score", pd.NA)
-        previous_score = prev_row.get("score", pd.NA)
-        score_delta = (
-            current_score - previous_score
-            if pd.notna(current_score) and pd.notna(previous_score)
-            else pd.NA
-        )
-        current.at[idx, "score_delta"] = score_delta
-
-        previous_status = prev_row.get("lifecycle_status")
-        current_status = row.get("lifecycle_status")
-        if previous_status != current_status:
-            current.at[idx, "weekly_change"] = f"{previous_status} -> {current_status}"
-        elif pd.notna(score_delta) and score_delta >= 5:
-            current.at[idx, "weekly_change"] = "Improved"
-        elif pd.notna(score_delta) and score_delta <= -5:
-            current.at[idx, "weekly_change"] = "Weakened"
+        previous_stage = prev_row.get("journey_stage")
+        current_stage = row.get("journey_stage")
+        if previous_stage != current_stage:
+            current.at[idx, "weekly_change"] = f"{previous_stage} -> {current_stage}"
         else:
             current.at[idx, "weekly_change"] = "Continued"
 
@@ -615,6 +791,8 @@ def normalize_tracking_dates(df):
         "handle_high_date",
         "handle_low_date",
         "breakout_success_date",
+        "structure_as_of_date",
+        "signal_as_of_date",
     ]
     normalized = df.copy()
     for column in date_columns:
@@ -628,6 +806,12 @@ def prepare_new_tracking_rows(results_df, as_of_date, active_df, archived_df):
         return pd.DataFrame()
 
     existing_ids = set()
+    active_symbols = set()
+    if active_df is not None and not active_df.empty and "Symbol" in active_df.columns:
+        active_symbols = {
+            normalize_stock_symbol(symbol)
+            for symbol in active_df["Symbol"].dropna().astype(str)
+        }
     for existing_df in [active_df, archived_df]:
         if existing_df is not None and not existing_df.empty and "base_id" in existing_df.columns:
             existing_ids.update(existing_df["base_id"].dropna().astype(str))
@@ -648,6 +832,8 @@ def prepare_new_tracking_rows(results_df, as_of_date, active_df, archived_df):
             continue
 
         row["Symbol"] = normalize_stock_symbol(row.get("Symbol"))
+        if row["Symbol"] in active_symbols:
+            continue
         base_id = build_base_id(row)
         if base_id in existing_ids:
             continue
@@ -667,11 +853,12 @@ def prepare_new_tracking_rows(results_df, as_of_date, active_df, archived_df):
         row["setup_reason"] = build_setup_reason(row)
         new_rows.append(row)
         existing_ids.add(base_id)
+        active_symbols.add(row["Symbol"])
 
     return pd.DataFrame(new_rows)
 
 
-def load_weekly_for_tracking(symbol, as_of_date, data_engine):
+def load_daily_for_tracking(symbol, as_of_date, data_engine):
     data_symbol = str(symbol).strip()
     try:
         df_full = data_engine.get_symbol(data_symbol)
@@ -689,9 +876,14 @@ def load_weekly_for_tracking(symbol, as_of_date, data_engine):
     if isinstance(df_full.columns, pd.MultiIndex):
         df_full.columns = df_full.columns.get_level_values(0)
     df_full = df_full.loc[:, ~df_full.columns.duplicated()]
-    return df_full.resample("W").agg(
-        {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
-    ).dropna()
+    return df_full
+
+
+def load_weekly_for_tracking(symbol, as_of_date, data_engine):
+    daily = load_daily_for_tracking(symbol, as_of_date, data_engine)
+    if daily.empty:
+        return daily
+    return resample_completed_weekly(daily, as_of_date)
 
 
 def calculate_handle_pivot(
@@ -881,7 +1073,10 @@ def calculate_pivot_lifecycle(
     breakout_date = pd.NaT
     breakout_atr = np.nan
 
-    start_pos = max(int(bottom_idx_i) + 2, 1)
+    # A stock can cross the left-high confirmation level on the first weekly
+    # candle after its base low. Handle construction still needs later bars,
+    # but the fallback left-high breakout must not be skipped.
+    start_pos = max(int(bottom_idx_i) + 1, 1)
     for current_pos in range(start_pos, len(window)):
         source = window.iloc[int(bottom_idx_i) + 1:current_pos].copy()
         snapshot = calculate_pivot_candidate_snapshot(
@@ -1118,7 +1313,9 @@ def update_tracking_row(row, as_of_date, data_engine, params=None):
     updated["last_tracked_date"] = scan_date
 
     try:
-        weekly = load_weekly_for_tracking(updated["Symbol"], scan_date, data_engine)
+        daily = load_daily_for_tracking(updated["Symbol"], scan_date, data_engine)
+        structure_cutoff = latest_completed_week_end(scan_date)
+        weekly = resample_completed_weekly(daily, structure_cutoff)
         if weekly.empty:
             updated["tracking_state"] = "ACTIVE"
             updated["tracking_error"] = "no_data_as_of_date"
@@ -1133,7 +1330,8 @@ def update_tracking_row(row, as_of_date, data_engine, params=None):
         if track_window.empty:
             track_window = weekly.copy()
 
-        latest_close = float(track_window["Close"].iloc[-1])
+        latest_close = float(daily["Close"].iloc[-1])
+        weekly_structure_close = float(track_window["Close"].iloc[-1])
         bottom_positions = (
             track_window.index.get_indexer([base_low_date], method="nearest")
             if pd.notna(base_low_date)
@@ -1157,6 +1355,44 @@ def update_tracking_row(row, as_of_date, data_engine, params=None):
         )
         lifecycle_status = pivot_lifecycle["lifecycle_status"]
         selected_pivot = float(pivot_lifecycle["selected_pivot"])
+        base_low = float(updated.get("base_low", updated.get("base_low_pivot")))
+        recovery_pct = (
+            (latest_close - base_low) / (left_high - base_low)
+            if left_high > base_low
+            else np.nan
+        )
+        failed = bool(pivot_lifecycle.get("lifecycle_phase") == "FAILED")
+        breakout_confirmed = bool(pd.notna(pivot_lifecycle.get("breakout_date")))
+        breakout_success = bool(pivot_lifecycle.get("breakout_success", False))
+        journey_stage = determine_journey_stage(
+            recovery_pct,
+            breakout_confirmed=breakout_confirmed,
+            breakout_success=breakout_success,
+            failed=failed,
+            discovery_recovery_min=params.get("RECOVERY_MIN", 0.40),
+            consideration_recovery_min=params.get(
+                "BREAKOUT_CONSIDERATION_RECOVERY_MIN", 0.85
+            ),
+        )
+        base_end_date, base_end_reason = resolve_base_end(
+            left_high_date,
+            pivot_lifecycle,
+            track_window.index[-1],
+        )
+        base_duration_weeks = (
+            (base_end_date - left_high_date).days / 7
+            if pd.notna(base_end_date) and pd.notna(left_high_date)
+            else np.nan
+        )
+        base_move_window = track_window.loc[:base_end_date].copy()
+        single_week_metrics = calculate_single_week_move_metrics(
+            base_move_window,
+            float(left_high - base_low),
+            excluded_end_date=(
+                base_end_date if base_end_reason == "BREAKOUT" else None
+            ),
+        )
+        distance_from_pivot_pct = (latest_close - selected_pivot) / selected_pivot
 
         updated.update(
             {
@@ -1170,6 +1406,25 @@ def update_tracking_row(row, as_of_date, data_engine, params=None):
                 "active_pivot_distance_pct": float(pivot_lifecycle["distance_from_pivot_pct"]),
                 "active_pivot_reason": "frozen selected pivot lifecycle",
                 **pivot_lifecycle,
+                "latest_close": latest_close,
+                "weekly_structure_close": weekly_structure_close,
+                "structure_as_of_date": track_window.index[-1],
+                "signal_as_of_date": daily.index[-1],
+                "recovery_pct": float(recovery_pct),
+                "distance_from_pivot_pct": float(distance_from_pivot_pct),
+                "active_pivot_distance_pct": float(distance_from_pivot_pct),
+                "journey_stage": journey_stage,
+                "base_end_date": base_end_date,
+                "base_end_reason": base_end_reason,
+                "base_duration_weeks": float(base_duration_weeks),
+                **single_week_metrics,
+                "max_single_week_move_to_depth_ratio": float(
+                    params.get("MAX_SINGLE_WEEK_MOVE_TO_DEPTH_RATIO", 0.50)
+                ),
+                "strategy_version": params.get("STRATEGY_VERSION", "base_lifecycle_v2"),
+                "base_window_weeks": int(
+                    updated.get("base_window_weeks", updated.get("scan_window_weeks", 0))
+                ),
             }
         )
         updated["setup_reason"] = build_setup_reason(updated)
@@ -1321,9 +1576,12 @@ class BaseLifecycleScanner:
                 },
             )
 
-            weekly = df.resample("W").agg(
-                {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
-            ).dropna()
+            weekly = resample_completed_weekly(
+                df,
+                latest_completed_week_end(
+                    self.as_of_date if self.as_of_date is not None else df.index[-1]
+                ),
+            )
             min_weekly_bars_required = self.params.get(
                 "MIN_WEEKLY_BARS_REQUIRED", self.params["MIN_WEEKS"] + 2
             )
@@ -1343,8 +1601,8 @@ class BaseLifecycleScanner:
                 return None
 
             weekly = calculate_cup_metrics(weekly, self.params)
-            window_results = []
-            for scan_window_weeks in self.params.get("BASE_WINDOWS", []):
+            selected_result = None
+            for scan_window_weeks in ordered_base_windows(self.params):
                 if len(weekly) < scan_window_weeks:
                     record_stage(
                         self.stage_results,
@@ -1378,11 +1636,14 @@ class BaseLifecycleScanner:
                     ath,
                     scan_window_weeks,
                     stage_results=self.stage_results,
+                    signal_close=float(close.iloc[-1]),
+                    signal_as_of_date=df.index[-1],
                 )
                 if res:
-                    window_results.append(res)
+                    selected_result = res
+                    break
 
-            if not window_results:
+            if selected_result is None:
                 record_stage(
                     self.stage_results,
                     "rejected",
@@ -1390,16 +1651,7 @@ class BaseLifecycleScanner:
                 )
                 return None
 
-            window_results = sorted(
-                window_results,
-                key=lambda row: (
-                    row.get("score", 0),
-                    row.get("pivot_detected", False),
-                    row.get("scan_window_weeks", 0),
-                ),
-                reverse=True,
-            )
-            return window_results[0], window_results
+            return selected_result, [selected_result]
 
         except Exception as exc:
             self.logger.debug(f"{data_symbol} failed: {exc}")
@@ -1416,16 +1668,37 @@ class BaseLifecycleScanner:
             res = self.scan_symbol(symbol)
             if res:
                 best_result, window_results = res
-                results.append(best_result)
                 all_window_results.extend(window_results)
+                if best_result.get("journey_stage") != "NOT_TRACKED":
+                    results.append(best_result)
 
         df = pd.DataFrame(results)
         self.all_window_results = pd.DataFrame(all_window_results)
         self.stage_results = stage_results_to_frames(self.stage_results)
         if not df.empty:
-            df = df.sort_values("score", ascending=False).reset_index(drop=True)
-            df["rank"] = range(1, len(df) + 1)
+            df = df.sort_values("Symbol", ascending=True).reset_index(drop=True)
         return df
+
+
+def build_replay_dates(start_date, end_date, frequency="daily"):
+    """Build business-daily or Friday replay dates without weekend duplicates."""
+    start_ts = pd.to_datetime(start_date)
+    end_ts = pd.to_datetime(end_date)
+    if start_ts > end_ts:
+        raise ValueError("start_date must be before or equal to end_date")
+
+    frequency_map = {"daily": "B", "weekly_friday": "W-FRI"}
+    if frequency not in frequency_map:
+        raise ValueError(f"Unsupported replay frequency: {frequency}")
+
+    replay_dates = pd.date_range(
+        start_ts.normalize(), end_ts.normalize(), freq=frequency_map[frequency]
+    )
+    if frequency == "weekly_friday" and (
+        len(replay_dates) == 0 or replay_dates[-1].normalize() != end_ts.normalize()
+    ):
+        replay_dates = replay_dates.append(pd.DatetimeIndex([end_ts]))
+    return replay_dates
 
 
 def run_tracking_replay(
@@ -1436,27 +1709,13 @@ def run_tracking_replay(
     data_path=DATA_PATH,
     debug=False,
     update_tracking=True,
+    progress_callback=None,
 ):
-    start_ts = pd.to_datetime(start_date)
-    end_ts = pd.to_datetime(end_date)
-    if start_ts > end_ts:
-        raise ValueError("start_date must be before or equal to end_date")
-
-    frequency_map = {
-        "daily": "D",
-        "weekly_friday": "W-FRI",
-    }
-    if frequency not in frequency_map:
-        raise ValueError(f"Unsupported replay frequency: {frequency}")
-
-    replay_dates = pd.date_range(start_ts, end_ts, freq=frequency_map[frequency])
-    if frequency == "daily" and (len(replay_dates) == 0 or replay_dates[0].normalize() != start_ts.normalize()):
-        replay_dates = pd.DatetimeIndex([start_ts]).append(replay_dates)
-    if len(replay_dates) == 0 or replay_dates[-1].normalize() != end_ts.normalize():
-        replay_dates = replay_dates.append(pd.DatetimeIndex([end_ts]))
+    replay_dates = build_replay_dates(start_date, end_date, frequency)
 
     summaries = []
-    for replay_date in replay_dates:
+    total_dates = len(replay_dates)
+    for completed_dates, replay_date in enumerate(replay_dates, start=1):
         replay_params = {**params, "AS_OF_DATE": replay_date}
         scanner = BaseLifecycleScanner(replay_params, data_path=data_path, debug=debug)
         results_df = scanner.run_scan()
@@ -1476,19 +1735,21 @@ def run_tracking_replay(
             if update_tracking
             else {}
         )
-        summaries.append(
-            {
-                "scan_as_of_date": replay_date.date().isoformat(),
-                "candidates": len(results_df),
-                "all_window_rows": len(scanner.all_window_results),
-                "stage_rows": sum(len(stage_df) for stage_df in scanner.stage_results.values()),
-                "tracked_active": tracking_info.get("active_count", pd.NA),
-                "tracked_archived": tracking_info.get("archived_count", pd.NA),
-                "new_tracked_bases": tracking_info.get("new_bases", pd.NA),
-                "latest_path": save_info["latest_path"],
-                "results_path": save_info["results_path"],
-            }
-        )
+        summary = {
+            "scan_as_of_date": replay_date.date().isoformat(),
+            "weekly_structure_refresh": bool(replay_date.weekday() == 4),
+            "candidates": len(results_df),
+            "all_window_rows": len(scanner.all_window_results),
+            "stage_rows": sum(len(stage_df) for stage_df in scanner.stage_results.values()),
+            "tracked_active": tracking_info.get("active_count", pd.NA),
+            "tracked_archived": tracking_info.get("archived_count", pd.NA),
+            "new_tracked_bases": tracking_info.get("new_bases", pd.NA),
+            "latest_path": save_info["latest_path"],
+            "results_path": save_info["results_path"],
+        }
+        summaries.append(summary)
+        if progress_callback is not None:
+            progress_callback(completed_dates, total_dates, summary)
 
     return pd.DataFrame(summaries)
 

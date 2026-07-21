@@ -25,6 +25,7 @@ def build_params(args):
     params.update(
         {
             "MIN_WEEKS": args.min_weeks,
+            "MIN_BASE_DURATION_WEEKS": args.min_base_duration,
             "MAX_WEEKS": max(args.base_windows),
             "BASE_WINDOWS": args.base_windows,
             "MIN_WEEKLY_BARS_REQUIRED": args.min_weeks + 2,
@@ -32,6 +33,7 @@ def build_params(args):
             "MAX_DEPTH": args.max_depth / 100.0,
             "RECOVERY_MIN": args.recovery_min / 100.0,
             "TRACKING_ELIGIBLE_RECOVERY_MIN": args.tracking_recovery_min / 100.0,
+            "BREAKOUT_CONSIDERATION_RECOVERY_MIN": args.consideration_recovery_min / 100.0,
             "MIN_PRIOR_UPTREND_PCT": args.prior_uptrend_min / 100.0,
             "PRIOR_UPTREND_DEPTH_MULTIPLIER": args.prior_uptrend_depth_multiplier,
             "PRIOR_UPTREND_LOOKBACK_RATIO": args.prior_uptrend_lookback_ratio,
@@ -58,6 +60,21 @@ def build_params(args):
     return params
 
 
+def print_replay_progress(completed, total, summary):
+    percent = int(round((completed / total) * 100)) if total else 100
+    bar_width = 24
+    filled = int(round(bar_width * completed / total)) if total else bar_width
+    progress_bar = "#" * filled + "-" * (bar_width - filled)
+    structure_mode = "weekly + daily" if summary["weekly_structure_refresh"] else "daily"
+    print(
+        f"[{progress_bar}] {percent:3d}% "
+        f"({completed}/{total}) {summary['scan_as_of_date']} completed | "
+        f"{structure_mode} | candidates={summary['candidates']} | "
+        f"active={summary['tracked_active']} | new={summary['new_tracked_bases']}",
+        flush=True,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run Base Lifecycle replay from a start date to an end date without Streamlit."
@@ -68,21 +85,31 @@ def main():
         "--frequency",
         choices=["daily", "weekly_friday"],
         default="daily",
-        help="Replay cadence. Use daily while validating how states evolved.",
+        help=(
+            "Default daily mode processes business days: daily state every day and "
+            "a refreshed completed-week structure on Fridays."
+        ),
     )
-    parser.add_argument("--base-windows", type=parse_windows, default=parse_windows("26,52,104"))
+    parser.add_argument("--base-windows", type=parse_windows, default=parse_windows("104,52,26"))
     parser.add_argument("--min-weeks", type=int, default=8)
+    parser.add_argument(
+        "--min-base-duration",
+        type=int,
+        default=12,
+        help="Minimum weeks from left high to handle pivot, breakout, or current structure",
+    )
     parser.add_argument("--min-depth", type=float, default=15.0, help="Percent")
     parser.add_argument("--max-depth", type=float, default=60.0, help="Percent")
-    parser.add_argument("--recovery-min", type=float, default=60.0, help="Base phase recovery percent")
-    parser.add_argument("--tracking-recovery-min", type=float, default=85.0, help="Tracking entry recovery percent")
+    parser.add_argument("--recovery-min", type=float, default=40.0, help="Lifecycle discovery recovery percent")
+    parser.add_argument("--tracking-recovery-min", type=float, default=40.0, help="Lifecycle persistence recovery percent")
+    parser.add_argument("--consideration-recovery-min", type=float, default=85.0, help="Breakout consideration recovery percent")
     parser.add_argument("--prior-uptrend-min", type=float, default=20.0, help="Percent")
     parser.add_argument("--prior-uptrend-depth-multiplier", type=float, default=1.0)
     parser.add_argument("--prior-uptrend-lookback-ratio", type=float, default=0.50)
     parser.add_argument("--prior-uptrend-min-lookback", type=int, default=12)
     parser.add_argument("--prior-uptrend-max-lookback", type=int, default=52)
     parser.add_argument("--prior-uptrend-min-advance", type=int, default=4)
-    parser.add_argument("--min-peak-to-low-weeks", type=int, default=1)
+    parser.add_argument("--min-peak-to-low-weeks", type=int, default=4)
     parser.add_argument("--atr-window", type=int, default=14)
     parser.add_argument("--compression-lookback", type=int, default=10)
     parser.add_argument("--tracking-handle-lookback", type=int, default=10)
@@ -103,6 +130,10 @@ def main():
     args = parser.parse_args()
 
     params = build_params(args)
+    print(
+        f"Starting Base Lifecycle replay: {args.start_date} to {args.end_date}",
+        flush=True,
+    )
     summary_df = run_tracking_replay(
         params,
         args.start_date,
@@ -111,12 +142,14 @@ def main():
         data_path=args.data_path,
         debug=args.debug,
         update_tracking=not args.no_tracking,
+        progress_callback=print_replay_progress,
     )
 
     print(
         summary_df[
             [
                 "scan_as_of_date",
+                "weekly_structure_refresh",
                 "candidates",
                 "all_window_rows",
                 "tracked_active",
