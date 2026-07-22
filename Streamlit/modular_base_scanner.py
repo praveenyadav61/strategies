@@ -89,9 +89,10 @@ def find_pivot(df, peak_idx, left_high, bottom_idx, bottom_price,
     pivot = None
     pivot_idx = None
 
-    # valid pivot zone: +5% to -15% around left high
-    pivot_min = left_high * 0.85
-    pivot_max = left_high * 1.05
+    # Valid pivot zone: 85% to 110% recovery of the base depth.
+    base_depth_price = left_high - bottom_price
+    pivot_min = bottom_price + 0.85 * base_depth_price
+    pivot_max = bottom_price + 1.10 * base_depth_price
 
     # scan right side of cup
     for i in range(bottom_idx + 1, len(df) - 4):

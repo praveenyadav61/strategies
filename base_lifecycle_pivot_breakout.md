@@ -3,6 +3,12 @@
 This document is the authoritative description of pivot selection and the
 post-breakout lifecycle used by `Streamlit/base_lifecycle_scanner.py`.
 
+The dashboard's primary `journey_stage` is intentionally simpler than the
+detailed statuses below. `BREAKOUT_CONSIDERATION` covers both 85%+ recovery and
+a confirmed-but-not-yet-successful breakout; `SUCCESSFUL_BREAKOUT` and `FAILED`
+are latched historical outcomes. See `base_lifecycle_flow.md` for that primary
+stage contract.
+
 ## 1. One actionable pivot
 
 The scanner calculates only the values needed to select one actionable pivot:
@@ -30,20 +36,21 @@ are not separate calculations.
 fallback pivot and remains important even when a lower handle is selected,
 because a successful breakout must eventually clear the old left-high supply.
 
-## 3. Handle detection
+## 3. Daily handle detection
 
-The handle is evaluated from recent weekly bars before the signal candle. The
-signal candle is excluded so it cannot create its own pivot.
+The accepted base, left high, base low, and depth come from completed weekly
+candles. Handle construction then replays completed daily candles after the
+actual daily low inside the weekly base-low candle. An incomplete current-day
+candle is never used.
 
 Default rules:
 
 ```text
-lookback                     = 10 weeks
-minimum pullback             = 3%
 maximum pullback             = one third of base depth
-minimum handle duration      = 2 weeks
-valid handle-high band       = 85% to 105% of left high
-merge tolerance              = 2% of left high
+confirmation duration        = 5 completed sessions after the pivot candle
+base_depth_price             = left high - base low
+valid handle-high minimum    = base low + 85% of base_depth_price
+valid handle-high maximum    = base low + 110% of base_depth_price
 ```
 
 The dynamic depth rule is:
@@ -56,23 +63,20 @@ handle_pullback_pct = (handle_high - handle_low) / handle_high
 Example: a 30% deep base permits at most a 10% handle pullback. A 15% deep
 base permits at most 5%.
 
-A handle is valid only when its pullback is between the minimum and dynamic
-maximum, lasts at least two weeks, and its high is inside the allowed band
-around the left high.
+A daily high inside the 85% to 110% recovery zone becomes the one temporary
+handle candidate. Any higher completed daily high replaces the candidate and
+restarts the five-session count. Lower highs do not create more pivot values.
+There is no minimum pullback: a tight sideways range is allowed. If the lowest
+subsequent daily low creates a pullback greater than one third of base depth,
+the candidate is invalidated.
 
-If a valid handle high is within 2% of the left high, the levels are treated as
-the same resistance area:
-
-```text
-pivot_source   = LEFT_HIGH_HANDLE_MERGED
-selected_pivot = left_high
-```
-
-If it is farther than 2% from the left high, the handle is distinct:
+The left high remains the active breakout pivot while the candidate is forming.
+After five completed sessions without a higher high and without excessive
+pullback, the candidate candle's daily high replaces it:
 
 ```text
-pivot_source   = HANDLE
-selected_pivot = handle_high
+pivot_source   = DAILY_HANDLE
+selected_pivot = candidate daily High
 ```
 
 Without a valid handle:
@@ -82,8 +86,11 @@ pivot_source   = LEFT_HIGH
 selected_pivot = left_high
 ```
 
-Before breakout, a selected handle is invalidated if the latest close falls
-below its handle low. Selection then returns to the left high.
+If a higher high appears after `HANDLE_READY` without a closing breakout, the
+state becomes `HANDLE_REFORMING` and the five-session confirmation restarts.
+The previous ready handle remains stored, but breakout confirmation is disabled
+until the higher candidate is ready. Excessive pullback returns selection to
+the left high.
 
 ## 4. Breakout confirmation
 
@@ -92,22 +99,25 @@ A close must cross the buffered selected pivot:
 ```text
 breakout_buffer = max(
     0.5% * selected_pivot,
-    0.20 * setup_weekly_ATR
+    0.20 * pivot_candle_daily_ATR_14
 )
 
 confirmation_level = selected_pivot + breakout_buffer
 
-previous_close <= confirmation_level
-current_close  >  confirmation_level
+previous_daily_close <= confirmation_level
+current_daily_close  >  confirmation_level
 ```
 
 This correctly detects a close that moves from slightly above the raw pivot to
 above the buffered level. Comparing `previous_close` only with the raw pivot
 would miss that transition.
 
-The first qualifying crossing confirms the breakout. On that date the selected
-pivot, pivot source, left high, handle values, ATR, and confirmation buffer are
-frozen. Later highs cannot move the pivot upward.
+Once a handle is ready, breakout is checked before processing a higher high.
+Therefore a daily close above the existing confirmation level freezes the
+existing pivot; the breakout candle cannot move its own pivot upward.
+
+The left-high pivot is breakout-eligible immediately after the base low and
+remains authoritative until a daily handle becomes ready.
 
 ## 5. Fixed post-breakout range
 
@@ -159,12 +169,12 @@ successful stock back inside `RETEST_RANGE` or `BUY_RANGE` is flagged as
 ## 7. Breakout failure
 
 The normal lower boundary is 10% below the frozen pivot. An additional ATR/pct
-buffer distinguishes a decisive failure from a marginal weekly breach:
+buffer distinguishes a decisive failure from a marginal daily breach:
 
 ```text
 failure_buffer = max(
     1.0% * selected_pivot,
-    0.25 * frozen_setup_weekly_ATR
+    0.25 * breakout_day_daily_ATR_14
 )
 
 hard_failure_level = breakout_range_low - failure_buffer
@@ -173,13 +183,13 @@ hard_failure_level = breakout_range_low - failure_buffer
 A confirmed breakout fails when either condition occurs:
 
 ```text
-1. one weekly close < hard_failure_level
-2. two consecutive weekly closes < breakout_range_low
+1. one daily close < hard_failure_level
+2. two consecutive daily closes < breakout_range_low
 ```
 
 One close below the range low but above the hard failure level is only a range
 breach warning. It is not immediately archived. Failure is evaluated from
-closes, not intraday/week lows, to reduce noise.
+daily closes, not intraday lows, to reduce noise.
 
 When failure occurs:
 

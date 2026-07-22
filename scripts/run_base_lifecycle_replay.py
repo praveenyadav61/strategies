@@ -25,6 +25,7 @@ def build_params(args):
     params.update(
         {
             "MIN_WEEKS": args.min_weeks,
+            "MIN_BASE_DURATION_WEEKS": args.min_base_duration,
             "MAX_WEEKS": max(args.base_windows),
             "BASE_WINDOWS": args.base_windows,
             "MIN_WEEKLY_BARS_REQUIRED": args.min_weeks + 2,
@@ -32,6 +33,7 @@ def build_params(args):
             "MAX_DEPTH": args.max_depth / 100.0,
             "RECOVERY_MIN": args.recovery_min / 100.0,
             "TRACKING_ELIGIBLE_RECOVERY_MIN": args.tracking_recovery_min / 100.0,
+            "BREAKOUT_CONSIDERATION_RECOVERY_MIN": args.consideration_recovery_min / 100.0,
             "MIN_PRIOR_UPTREND_PCT": args.prior_uptrend_min / 100.0,
             "PRIOR_UPTREND_DEPTH_MULTIPLIER": args.prior_uptrend_depth_multiplier,
             "PRIOR_UPTREND_LOOKBACK_RATIO": args.prior_uptrend_lookback_ratio,
@@ -41,12 +43,6 @@ def build_params(args):
             "MIN_PEAK_TO_LOW_WEEKS": args.min_peak_to_low_weeks,
             "ATR_WINDOW": args.atr_window,
             "COMPRESSION_LOOKBACK": args.compression_lookback,
-            "TRACKING_HANDLE_LOOKBACK_WEEKS": args.tracking_handle_lookback,
-            "TRACKING_HANDLE_MIN_PULLBACK_PCT": args.tracking_handle_min_pullback / 100.0,
-            "HANDLE_MIN_DURATION_WEEKS": args.handle_min_duration,
-            "PIVOT_MIN_LEFT_HIGH_RATIO": args.pivot_min_left_high / 100.0,
-            "PIVOT_MAX_LEFT_HIGH_RATIO": args.pivot_max_left_high / 100.0,
-            "HANDLE_MAJOR_MERGE_TOLERANCE_PCT": args.handle_major_merge_tolerance / 100.0,
             "BREAKOUT_PRICE_BUFFER_PCT": args.breakout_price_buffer / 100.0,
             "BREAKOUT_ATR_BUFFER_MULTIPLIER": args.breakout_atr_buffer,
             "FAILURE_PRICE_BUFFER_PCT": args.failure_price_buffer / 100.0,
@@ -56,6 +52,21 @@ def build_params(args):
         }
     )
     return params
+
+
+def print_replay_progress(completed, total, summary):
+    percent = int(round((completed / total) * 100)) if total else 100
+    bar_width = 24
+    filled = int(round(bar_width * completed / total)) if total else bar_width
+    progress_bar = "#" * filled + "-" * (bar_width - filled)
+    structure_mode = "weekly + daily" if summary["weekly_structure_refresh"] else "daily"
+    print(
+        f"[{progress_bar}] {percent:3d}% "
+        f"({completed}/{total}) {summary['scan_as_of_date']} completed | "
+        f"{structure_mode} | candidates={summary['candidates']} | "
+        f"active={summary['tracked_active']} | new={summary['new_tracked_bases']}",
+        flush=True,
+    )
 
 
 def main():
@@ -68,29 +79,33 @@ def main():
         "--frequency",
         choices=["daily", "weekly_friday"],
         default="daily",
-        help="Replay cadence. Use daily while validating how states evolved.",
+        help=(
+            "Default daily mode processes business days: daily state every day and "
+            "a refreshed completed-week structure on Fridays."
+        ),
     )
-    parser.add_argument("--base-windows", type=parse_windows, default=parse_windows("26,52,104"))
+    parser.add_argument("--base-windows", type=parse_windows, default=parse_windows("104,52,26"))
     parser.add_argument("--min-weeks", type=int, default=8)
+    parser.add_argument(
+        "--min-base-duration",
+        type=int,
+        default=12,
+        help="Minimum weeks from left high to handle pivot, breakout, or current structure",
+    )
     parser.add_argument("--min-depth", type=float, default=15.0, help="Percent")
     parser.add_argument("--max-depth", type=float, default=60.0, help="Percent")
-    parser.add_argument("--recovery-min", type=float, default=60.0, help="Base phase recovery percent")
-    parser.add_argument("--tracking-recovery-min", type=float, default=85.0, help="Tracking entry recovery percent")
+    parser.add_argument("--recovery-min", type=float, default=40.0, help="Lifecycle discovery recovery percent")
+    parser.add_argument("--tracking-recovery-min", type=float, default=40.0, help="Lifecycle persistence recovery percent")
+    parser.add_argument("--consideration-recovery-min", type=float, default=85.0, help="Breakout consideration recovery percent")
     parser.add_argument("--prior-uptrend-min", type=float, default=20.0, help="Percent")
     parser.add_argument("--prior-uptrend-depth-multiplier", type=float, default=1.0)
     parser.add_argument("--prior-uptrend-lookback-ratio", type=float, default=0.50)
     parser.add_argument("--prior-uptrend-min-lookback", type=int, default=12)
     parser.add_argument("--prior-uptrend-max-lookback", type=int, default=52)
     parser.add_argument("--prior-uptrend-min-advance", type=int, default=4)
-    parser.add_argument("--min-peak-to-low-weeks", type=int, default=1)
+    parser.add_argument("--min-peak-to-low-weeks", type=int, default=6)
     parser.add_argument("--atr-window", type=int, default=14)
     parser.add_argument("--compression-lookback", type=int, default=10)
-    parser.add_argument("--tracking-handle-lookback", type=int, default=10)
-    parser.add_argument("--tracking-handle-min-pullback", type=float, default=3.0, help="Percent")
-    parser.add_argument("--handle-min-duration", type=int, default=2, help="Completed weeks")
-    parser.add_argument("--pivot-min-left-high", type=float, default=85.0, help="Percent of left high")
-    parser.add_argument("--pivot-max-left-high", type=float, default=105.0, help="Percent of left high")
-    parser.add_argument("--handle-major-merge-tolerance", type=float, default=2.0, help="Percent")
     parser.add_argument("--breakout-price-buffer", type=float, default=0.5, help="Percent")
     parser.add_argument("--breakout-atr-buffer", type=float, default=0.20, help="ATR multiplier")
     parser.add_argument("--failure-price-buffer", type=float, default=1.0, help="Percent")
@@ -103,6 +118,10 @@ def main():
     args = parser.parse_args()
 
     params = build_params(args)
+    print(
+        f"Starting Base Lifecycle replay: {args.start_date} to {args.end_date}",
+        flush=True,
+    )
     summary_df = run_tracking_replay(
         params,
         args.start_date,
@@ -111,12 +130,14 @@ def main():
         data_path=args.data_path,
         debug=args.debug,
         update_tracking=not args.no_tracking,
+        progress_callback=print_replay_progress,
     )
 
     print(
         summary_df[
             [
                 "scan_as_of_date",
+                "weekly_structure_refresh",
                 "candidates",
                 "all_window_rows",
                 "tracked_active",
