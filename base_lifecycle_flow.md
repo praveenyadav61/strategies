@@ -1,523 +1,236 @@
-# Base Lifecycle Scanner Flow
+# Base Lifecycle Scanner — Iteration 3 (All Windows)
 
-This file is the working spec for the newer base/tracking lifecycle engine and
-`Streamlit/base_lifecycle_scanner.py`. Keep suggestions, doubts, and future rule
-changes here so the logic can evolve without disturbing the older Base Formation
-scanner.
+This is the working specification for `Streamlit/base_lifecycle_scanner.py` and
+the Base Phase / Tracking Phase dashboard. Pivot construction, breakout
+confirmation, success, retest, and failure details live in
+`base_lifecycle_pivot_breakout.md`.
 
-Pivot construction, buffered breakout confirmation, pivot freezing, and failure
-rules are specified in `base_lifecycle_pivot_breakout.md`. That focused document
-is authoritative whenever this overview and the pivot implementation differ.
+## 1. Purpose
 
-## 1. Data Universe
+The scanner has one primary job: keep a simple, persistent view of each stock's
+journey from recovery through breakout.
 
-- Reads daily parquet files from `data/daily`.
-- Fallback path: `data/test_data`.
-- Uses the last `1000` daily candles per stock.
-
-## 2. Fixed Daily Trend Filter
-
-Stock is rejected unless:
+The primary stages are:
 
 ```text
-latest close > EMA200
-EMA50 > EMA200
-```
-
-EMA values are calculated on daily close.
-
-## 3. Weekly Conversion
-
-Daily data is resampled to weekly:
-
-```text
-Open   = first
-High   = max
-Low    = min
-Close  = last
-Volume = sum
-```
-
-Minimum weekly bars required:
-
-```text
-MIN_WEEKLY_BARS_REQUIRED = MIN_WEEKS + 2
-default = 8 + 2 = 10 weeks
-```
-
-## 4. Multi-Window Scan
-
-Each stock is scanned separately across:
-
-```text
-26, 52, 104 weeks
-```
-
-If stock has fewer weekly candles than a window, that window is skipped.
-
-## 5. Left High Detection
-
-For each scan window:
-
-- Exclude the last `MIN_WEEKS` from peak search.
-- Default `MIN_WEEKS = 8`.
-
-Example:
-
-```text
-In a 52-week window, scanner searches left high in the first 44 weeks.
-```
-
-Logic:
-
-```text
-peak_search_window = window excluding last MIN_WEEKS
-left_high = highest High in peak_search_window
-```
-
-## 6. Base Low Detection
-
-After left high:
-
-```text
-base_low = lowest Low after left_high
-```
-
-## 7. Depth Filter
-
-Depth:
-
-```text
-Depth = (left_high - base_low) / left_high
-```
-
-Current default hard filter:
-
-```text
-MIN_DEPTH = 15%
-MAX_DEPTH = 60%
-```
-
-Accepted only if:
-
-```text
-15% <= depth <= 60%
-```
-
-## 8. Recovery Filter
-
-Recovery from bottom:
-
-```text
-recovery_pct = (latest_close - base_low) / (left_high - base_low)
-```
-
-Base phase default hard filter:
-
-```text
-recovery_pct >= 60%
-```
-
-Tracking eligibility default:
-
-```text
-TRACKING_ELIGIBLE_RECOVERY_MIN = 85%
-```
-
-There is no upper cap, so values above `100%` are allowed. These may already be
-breakout or extension cases and should be handled by tracking instead of being
-rejected by base detection.
-
-## 9. Base Duration
-
-Returned as information, not a hard filter:
-
-```text
-base_duration_weeks = weeks from left_high to latest candle
-```
-
-## 10. Compression
-
-Calculated, not a hard filter.
-
-Weekly ATR uses:
-
-```text
-ATR_WINDOW = 14
-```
-
-Compression is true if:
-
-```text
-average ATR of last 10 weeks < 30th percentile ATR of full scan window
-```
-
-Defaults:
-
-```text
-COMPRESSION_LOOKBACK = 10
-ATR percentile threshold = 30%
-```
-
-## 11. Tight Group
-
-Calculated, not a hard filter.
-
-Uses last `5` weekly closes:
-
-```text
-tight_range = (max_close - min_close) / average_close
-```
-
-Tight group is true if:
-
-```text
-tight_range < 5%
-```
-
-Returned as:
-
-```text
-Tight Groups = 1 or 0
-```
-
-## 12. Prior Uptrend
-
-Prior uptrend is a hard scanner filter in the lifecycle scanner.
-
-Looks at up to `12` weekly candles before left high:
-
-```text
-prior_uptrend_pct = (left_high - lowest_low_before_base) / lowest_low_before_base
-```
-
-Minimum required prior uptrend:
-
-```text
-min_prior_uptrend_pct = max(20%, 1.0 * depth)
-```
-
-Example:
-
-```text
-If depth = 20%:
-min_prior_uptrend_pct = max(20%, 20%) = 20%
-```
-
-If prior uptrend is below the required value, that stock-window result is rejected.
-Both values are configurable in the Base Lifecycle sidebar:
-
-```text
-MIN_PRIOR_UPTREND_PCT
-PRIOR_UPTREND_DEPTH_MULTIPLIER
-```
-
-Returned for accepted rows as:
-
-```text
-prior_uptrend = True
-```
-
-## 13. Pivot Detection
-
-The scanner uses one actionable pivot. A valid handle high is selected when it
-exists; otherwise the left high is selected. A handle may pull back no more than
-one third of the base depth and must last at least two weeks. A handle within 2%
-of the left high is merged with it and the left high remains selected.
-
-```text
-valid distinct handle -> selected_pivot = handle_high_pivot
-otherwise             -> selected_pivot = left_high_pivot
-```
-
-Range-high, range-close, resistance-cluster, and ranked swing pivots are not
-calculated.
-
-See `base_lifecycle_pivot_breakout.md` for exact construction and freezing rules.
-
-## 14. Distance Metrics
-
-Returned columns:
-
-```text
-distance_from_left_high_pct = (latest_close - left_high) / left_high
-distance_from_pivot_pct    = (latest_close - selected_pivot) / selected_pivot
-```
-
-Examples:
-
-```text
--0.03 means 3% below pivot/left high.
- 0.08 means 8% above pivot/left high.
-```
-
-## 15. Breakout Detection
-
-Breakout is confirmed by a weekly-close crossing of a frozen buffered level:
-
-```text
-breakout_buffer = max(0.5% of pivot, 0.20 * setup weekly ATR)
-confirmation_level = pivot + breakout_buffer
-
-previous_close <= confirmation_level
-current_close > confirmation_level
-```
-
-The evaluated candle is excluded from its own pivot calculation. At confirmation,
-the selected pivot, setup ATR, buffers, and breakout date freeze. The management
-range is then fixed at 10% below to 10% above the pivot.
-
-Returned metrics:
-
-- `breakout_date`
-- `days_since_breakout`
-- `weeks_since_breakout`
-- `breakout_close`
-- `breakout_volume_ratio`
-- `gain_since_breakout_pct`
-- `max_gain_after_breakout_pct`
-- `max_drawdown_after_breakout_pct`
-- `pullback_from_post_breakout_high_pct`
-- `holding_pivot`
-
-Volume ratio:
-
-```text
-breakout_volume_ratio = breakout_week_volume / 10-week volume MA
-```
-
-## 16. Lifecycle Status
-
-Pre-breakout progression includes:
-
-```text
-BASE_FORMING
-TRACKING
-NEAR_PIVOT
-HANDLE_READY
-```
-
-Post-breakout states include:
-
-```text
-BREAKOUT_BUY_RANGE
-BREAKOUT_RETEST_RANGE
-BREAKOUT_RANGE_BREACH
-BREAKOUT_SUCCESS
-POST_SUCCESS_REENTRY_RANGE
-BREAKOUT_STALLED
+NOT_TRACKED
+RECOVERY_BUILDING
+BREAKOUT_CONSIDERATION
+SUCCESSFUL_BREAKOUT
 FAILED
 ```
 
-One close below the buffered hard-failure level, or two consecutive closes
-below the 10%-lower boundary, produces `FAILED`. Exact status priority is documented in
-`base_lifecycle_pivot_breakout.md`.
+Detailed pivot lifecycle fields remain in the saved data for diagnosis and
+future strategies, but they are not the primary grouping or sorting system.
+There is no strategy score or rank.
 
-## 17. Internal Base-Window Score
+## 2. Data timing
 
-There is no pivot-candidate scoring or user-facing lifecycle rank. Pivot
-selection is rule-based: valid handle, otherwise left high. The existing base
-structure score below is retained internally only to deduplicate a stock that
-qualifies in multiple scan windows; it is hidden from the compact lifecycle UI.
+Daily parquet data is the source.
 
-Max score is capped at `100`.
+- Base structure, left high, base low, and depth use completed Friday-labelled
+  weekly candles. Monday through Thursday reuse the preceding Friday structure;
+  Friday refreshes it with the newly completed week.
+- The incomplete current week is excluded from structural calculations.
+- Completed daily candles detect and confirm the handle, confirm breakout, and
+  update post-breakout lifecycle. The latest daily close also drives recovery,
+  pivot distance, and the reversible journey stage.
 
-Score components:
+This keeps the base stable while allowing the dashboard to react during the
+week as price changes.
 
-```text
-Recovery quality: up to 25 points
-Depth quality:    up to 20 points
-Pivot distance:   up to 20 points if below/near pivot
-Post-breakout:    up to 15 points if above pivot
-Prior uptrend:    +10
-Compression:      +10
-Tight group:      +5
-Pivot detected:   +10
-```
+## 3. All-window base discovery
 
-Depth quality is best around:
+Every stock is checked independently in this order:
 
 ```text
-30% depth
+104 weeks -> 52 weeks -> 26 weeks
 ```
 
-Distance logic:
-
-- If below pivot, best score is near pivot.
-- If above pivot, score reduces as it gets extended.
-- Above `25%` from pivot gives `0` for post-breakout distance score.
-
-## 18. Best Row Selection
-
-For each stock:
-
-- Scanner may find valid results in multiple windows.
-- The main dashboard table is not duplicated by window.
-- It sorts window results by:
+The scanner evaluates every window for which enough weekly history exists.
+Each window can produce a valid lifecycle candidate, but an equivalent smaller
+window is consolidated into the largest matching result:
 
 ```text
-score descending
-pivot_detected descending
-scan_window_weeks descending
+104W and 52W find the same base -> keep 104W once; record 104,52 as equivalent
+52W finds a different base      -> save the distinct 52W candidate
+26W finds a different base      -> save the distinct 26W candidate
 ```
 
-Then keeps the best row in the main table.
+Equivalence requires the same symbol, nearby left-high and bottom dates, and
+similar anchor prices. This removes duplicate representations such as the same
+51-week base found through both 104W and 52W searches while preserving genuinely
+different nested bases. Recovery percentage does not decide whether a window is
+structurally valid. A valid unique structure below 40% remains `NOT_TRACKED`
+until its own recovery reaches the tracking threshold.
 
-This means the main table is a union of symbols, with one best row per stock.
-If the same stock qualifies in `16`, `26`, and `52` weeks, only its best-scoring
-row appears in the main table.
+Lifecycle Journey, Base Phase, Tracking Phase, and Review Funnel provide a base
+window filter. All available windows are selected by default.
 
-All valid stock-window rows are still stored and shown in:
+## 4. Structural base rules
+
+For each candidate window:
+
+1. Search for the left high while excluding the latest 12 weekly candles.
+2. Find the lowest weekly low after that left high.
+3. Require the left high and base low to be at least six weeks apart.
+4. Calculate depth:
 
 ```text
-All Window Results
+depth = (left_high - base_low) / left_high
 ```
 
-So `All Window Results` can contain the same stock multiple times, one row per
-valid scan window.
-
-## 19. Legacy Saved Rank
-
-Saved snapshots may still contain a rank derived from the internal base-window
-score for backward compatibility:
+5. Require depth between 15% and 60%.
+6. Require a prior uptrend before the left high:
 
 ```text
-sort by score descending
-rank = 1, 2, 3...
+minimum prior uptrend = max(20%, base depth)
 ```
 
-Rank and score are not shown in the compact lifecycle table and do not select
-the handle or left-high pivot.
+The prior-uptrend lookback scales with the window and is capped by the current
+configuration. Compression and tight-group fields are informational, not hard
+filters.
 
-## 20. Weekly Snapshot Comparison
-
-Each run saves:
+Actual base width must be at least 12 weeks. It is measured from the left high
+to the first applicable structural right edge:
 
 ```text
-data/base_lifecycle_scans/base_lifecycle_YYYY-MM-DD.parquet
-data/base_lifecycle_scans/latest.parquet
-data/base_lifecycle_scans/base_lifecycle_windows_YYYY-MM-DD.parquet
-data/base_lifecycle_scans/latest_windows.parquet
-data/base_lifecycle_scans/base_lifecycle_stages_YYYY-MM-DD.parquet
-data/base_lifecycle_scans/latest_stage_results.parquet
+distinct handle exists -> handle pivot date
+otherwise breakout     -> breakout date
+otherwise               -> latest completed weekly candle
 ```
 
-Comparison with previous snapshot:
+A fallback left-high pivot is not a right edge and is ignored for this
+measurement. `base_end_date`, `base_end_reason`, and `base_duration_weeks` are
+stored so the decision can be inspected in the UI.
+
+No single weekly move may exceed 50% of the total base depth in price:
 
 ```text
-New       = not present previously
-Improved  = score_delta >= +5
-Weakened  = score_delta <= -5
-Continued = same status and small score change
-Dropped   = present before, absent now
+weekly true range = max(
+    weekly high - weekly low,
+    abs(weekly high - previous weekly close),
+    abs(weekly low - previous weekly close)
+)
+
+largest weekly true range / (left high - base low) <= 50%
 ```
 
-If lifecycle status changed, it shows:
+This rejects bases dominated by one abnormal week. When a breakout has already
+been confirmed, its breakout candle is excluded from this filter so a powerful
+breakout does not invalidate the preceding base. The measured move, its date,
+and its depth ratio are saved for review. The 50% limit is a fixed strategy
+constant in `DEFAULT_PARAMS`; it does not need to be supplied to the replay
+command.
+
+The existing daily trend gate also remains:
 
 ```text
-OLD_STATUS -> NEW_STATUS
+latest daily close > EMA200
+daily EMA50 > daily EMA200
 ```
 
-Lifecycle symbols are stored stockwise without exchange suffix:
+## 5. Daily recovery
+
+Current recovery uses the latest daily close against the frozen structural
+range:
 
 ```text
-ABB.NS parquet file -> Symbol = ABB
+recovery_pct = (latest_daily_close - base_low) / (left_high - base_low)
 ```
 
-Local file lookup still supports `.NS.parquet`, but scanner outputs and tracking
-ids avoid `.NS` so the flow can generalize stockwise.
-
-## 21. Review Funnel
-
-The lifecycle scanner also stores stage-level rows so a trader can inspect stocks
-before they become final candidates.
-
-Current stage keys:
+Recovery may exceed 100%. The key thresholds are:
 
 ```text
-daily_trend_passed
-weekly_data_passed
-depth_passed
-recovery_passed
-prior_uptrend_passed
-pivot_evaluated
-final_candidates
-rejected
+40% = visible lifecycle entry
+85% = breakout consideration
 ```
 
-Stage tables may show the same stock multiple times because each stock-window is
-evaluated separately across:
+Recovery stages are reversible. A stock without a confirmed breakout can move
+from 87% to 78% and return from `BREAKOUT_CONSIDERATION` to
+`RECOVERY_BUILDING`. A fresh scan will place it correctly; no manual movement is
+required.
+
+## 6. Primary journey-stage decision
+
+The stage priority is:
+
+```python
+if failed:
+    journey_stage = "FAILED"
+elif breakout_success:
+    journey_stage = "SUCCESSFUL_BREAKOUT"
+elif breakout_confirmed:
+    journey_stage = "BREAKOUT_CONSIDERATION"
+elif recovery_pct >= 0.85:
+    journey_stage = "BREAKOUT_CONSIDERATION"
+elif recovery_pct >= 0.40:
+    journey_stage = "RECOVERY_BUILDING"
+else:
+    journey_stage = "NOT_TRACKED"
+```
+
+Confirmed breakout, success, and failure are historical/latching outcomes.
+Consequently, ordinary recovery movement cannot erase them. Failure has highest
+priority, followed by successful breakout.
+
+`NOT_TRACKED` structural rows are not shown in the candidate table and are not
+added to active tracking. They can be rediscovered automatically on a later
+scan when daily recovery reaches 40%.
+
+## 7. Pivot and breakout summary
+
+Only two actionable pivot sources are needed:
 
 ```text
-26, 52, 104 weeks
+five-session daily handle ready -> selected_pivot = candidate daily High
+otherwise                      -> selected_pivot = left high
 ```
 
-The main lifecycle table still shows one best row per stock, but the Review
-Funnel can show every stock-window row at each scanner step.
-
-Rejected rows may include:
+The handle-high eligibility zone is relative to base depth, not to the absolute
+left-high price:
 
 ```text
-daily_trend_failed
-not_enough_weekly_data
-depth_too_shallow
-depth_too_deep
-recovery_too_low
-prior_uptrend_too_low
-no_valid_window
-condition_error
+base_depth_price = left_high - base_low
+minimum handle   = base_low + (0.85 * base_depth_price)
+maximum handle   = base_low + (1.10 * base_depth_price)
 ```
 
-This is intended for manual review while scanner rules are still being improved.
+The candidate handle can pull back no more than one third of base depth. Any
+higher daily high restarts its five-session confirmation. A daily close crossing
+the selected pivot plus the daily ATR/price buffer confirms breakout. Post-breakout management uses a fixed range
+from 10% below to 10% above the selected pivot. Success must also clear the old
+left-high supply when the handle pivot is lower.
 
-## 22. Historical Tracking Replay
+See `base_lifecycle_pivot_breakout.md` for exact formulas and failure buffers.
 
-The lifecycle engine supports historical as-of scans:
+## 8. Persistence and tracking
+
+At 40% recovery, each valid window candidate can enter active tracking. Its stable
+`base_id` uses:
 
 ```text
-AS_OF_DATE
+Symbol + base_window_weeks + left_high_date + base_low_date
 ```
 
-When this is set, each symbol is sliced to data available on or before that date.
-This lets prior-uptrend and other rule changes be tested on historical snapshots.
+Several windows for the same symbol may be active simultaneously. The same
+window/base identity cannot be inserted twice. Pivot is intentionally not part
+of `base_id`, because handle selection can evolve while the base remains the
+same.
 
-The Base Lifecycle page also supports replay between a start date and end date.
-Replay frequency can be:
+Each tracking update:
 
-```text
-Daily
-Weekly Friday
-```
+1. reloads prices through the as-of date;
+2. calculates current recovery and pivot distance from the latest daily close;
+3. evaluates handle, breakout, and post-breakout history on completed daily candles;
+4. recalculates the primary journey stage;
+5. appends a dated history row; and
+6. archives a base after a confirmed breakout fails.
 
-Daily replay stores one snapshot per calendar date in the selected range.
-Weekly Friday replay stores Friday snapshots plus the exact end date if needed.
-Each run is saved using the snapshot date:
+Tracking continues even if the structure would no longer be rediscovered by a
+fresh scan. This is how confirmed breakout history remains available.
 
-```text
-base_lifecycle_YYYY-MM-DD.parquet
-base_lifecycle_windows_YYYY-MM-DD.parquet
-base_lifecycle_stages_YYYY-MM-DD.parquet
-```
-
-Lifecycle dashboard pages can load any saved snapshot date that has a matching
-`base_lifecycle_YYYY-MM-DD.parquet` file. This allows reviewing the dashboard as
-of a historical scan date instead of always viewing `latest`.
-
-## 23. Continuous Base Tracking
-
-Scanner snapshots answer:
-
-```text
-What fresh bases did this scan date detect?
-```
-
-The tracking ledger answers:
-
-```text
-Which previously detected bases are still being watched?
-```
-
-Tracking files are stored separately from weekly scanner snapshot files:
+Tracking files:
 
 ```text
 data/base_lifecycle_tracking/active_tracked_bases.parquet
@@ -525,149 +238,90 @@ data/base_lifecycle_tracking/tracking_history.parquet
 data/base_lifecycle_tracking/archived_tracked_bases.parquet
 ```
 
-When a base first appears in the lifecycle scanner and has
-`recovery_pct >= TRACKING_ELIGIBLE_RECOVERY_MIN`, it is added to active tracking
-with a stable `base_id` built from:
+## 9. Dashboard presentation
+
+`Lifecycle Journey` is the simple primary page. It combines active tracking with
+the latest discovery snapshot, keeps one current row per window-aware base, and presents
+exactly three primary tables in this order:
+
+```text
+Breakout Consideration
+Recovery Building
+Successful Breakout
+```
+
+`FAILED` and `NOT_TRACKED` are not shown on this page. Base Phase and Tracking
+Phase remain available as diagnostic pages during validation.
+
+All lifecycle pages expose a multi-select base-window filter with 104W, 52W,
+and 26W selected by default. The same symbol can appear more than once when it
+has valid bases in several windows.
+
+The three journey tables lead with the compact decision set:
 
 ```text
 Symbol
-left_high_date
-base_low_date
+today_status
+journey_stage
+recovery_pct
+base_window_weeks
+pivot_source
+selected_pivot
+distance_from_pivot_pct
+breakout_range_low
+breakout_range_high
 ```
 
-Pivot is deliberately excluded from `base_id` because pivot logic may evolve
-while the same base is being tracked.
-
-On each single scan or replay date:
+`today_status` is derived in the dashboard from tracking history and the
+selected scan/replay date; it does not require another price scan:
 
 ```text
-1. Fresh bases are scanned and saved as normal.
-2. New detected bases are added to active tracking.
-3. Existing active bases are updated from current price data even if they no longer pass fresh base detection.
-4. Breakout, pullback, extension, and failure metrics are recalculated from the stored pivot.
-5. FAILED bases move to archived tracking.
-6. Every date update is appended to tracking_history.
+NEW BASE       first_detected_date equals the selected date
+NEW TO STAGE   journey_stage differs from the preceding tracking date
+CONTINUED      journey_stage is unchanged
 ```
 
-This allows a stock that was detected two weeks ago to keep being tracked after
-breakout or extension, even if today's base scanner would no longer rediscover
-that old base.
+The activity filter can show any combination of these values. On the History
+tab, the status is evaluated against each row's own `tracking_date`; on current
+views it is evaluated against the selected or latest tracking date. New and
+new-to-stage rows sort before continued rows.
 
-## 24. UI Workflow
+Other technical, industry, and tagging fields are selectable optional columns.
+The main review order is journey stage, then recovery descending, then absolute
+distance from pivot. The chart shows fine horizontal pivot and breakout-range
+lines; detailed stock fields are collapsed below it.
 
-Only two lifecycle pages are exposed in the sidebar:
+## 10. Replay and saved output
 
-```text
-Base Phase
-Tracking Phase
-```
-
-`Base Phase` scans and replays base candidates over an as-of date or date range.
-During initial setup, scan/replay execution is kept out of Streamlit. Run it
-from:
+Run a historical/current replay with one command:
 
 ```text
 python scripts/run_base_lifecycle_replay.py --start-date YYYY-MM-DD --end-date YYYY-MM-DD
 ```
 
-Omit `--end-date` to replay through the current date. The script stores scanner
-snapshots and sends eligible bases into tracking.
+Omitting `--end-date` replays through the current date. Default `daily` mode
+processes business days only. Every processed day refreshes recovery, pivot
+distance, and journey state from the daily close; Friday additionally makes the
+new completed weekly structure available. `--frequency weekly_friday` remains
+available when only weekly snapshots are wanted. Default thresholds are 40%
+discovery/tracking and 85% consideration. The script saves dated candidate,
+diagnostic-stage, and tracking files under `data/`.
 
-`Tracking Phase` reviews active, historical, and archived tracked bases from the
-separate tracking files.
+The command prints one progress-bar line after every completed replay date,
+showing completed/total dates, percentage, daily versus weekly refresh mode,
+candidate count, active tracked bases, and newly tracked bases.
 
-Tracking Phase recalculates the same historical state machine through each
-tracking date. Once a breakout is found, the actionable levels remain frozen:
+Saved compatibility fields such as `lifecycle_status`, `lifecycle_phase`,
+`major_pivot`, and `active_pivot_price` remain useful for detailed inspection.
+They must not be treated as additional primary journey groups.
 
-```text
-left_high_pivot
-handle_high_pivot
-selected_pivot
-confirmation_level
-breakout_range_low
-breakout_range_high
-hard_failure_level
-success_level
-```
+## 11. Intentionally deferred
 
-`major_pivot` and `active_pivot_price`, where present in older saved data or
-charts, are compatibility aliases for `selected_pivot`. Tracked bases archive
-only after a confirmed breakout fails. A handle invalidated before confirmation
-returns selection to the left high and reports `RESETTING`.
+The architecture retains enough raw fields to add these later without changing
+the primary stage contract:
 
-Base Phase prior-uptrend now uses a variable lookback based on the selected base
-window:
-
-```text
-prior_uptrend_lookback_weeks =
-    min(PRIOR_UPTREND_MAX_LOOKBACK_WEEKS,
-        max(PRIOR_UPTREND_MIN_LOOKBACK_WEEKS,
-            scan_window_weeks * PRIOR_UPTREND_LOOKBACK_RATIO))
-```
-
-Defaults:
-
-```text
-26W base  -> 13W prior lookback
-52W base  -> 26W prior lookback
-104W base -> 52W prior lookback
-```
-
-The prior low must also be at least `PRIOR_UPTREND_MIN_ADVANCE_WEEKS`
-before the left high, default 4 weeks. This avoids passing a stock only because
-of a one-week spike from a very recent low.
-
-Base Phase rejects structures where the left high and base low are from the same
-weekly candle:
-
-```text
-peak_to_low_weeks < MIN_PEAK_TO_LOW_WEEKS
-```
-
-Default `MIN_PEAK_TO_LOW_WEEKS = 1`.
-
-Tracking/status labels used by the lifecycle engine:
-
-```text
-BASE_FORMING
-TRACKING
-NEAR_PIVOT
-HANDLE_READY
-BREAKOUT_BUY_RANGE
-BREAKOUT_RETEST_RANGE
-BREAKOUT_RANGE_BREACH
-BREAKOUT_SUCCESS
-POST_SUCCESS_REENTRY_RANGE
-BREAKOUT_STALLED
-FAILED
-RESETTING
-```
-
-New tracking rows carry manual review fields for later workflow support:
-
-```text
-review_status
-setup_rating
-notes
-last_reviewed_date
-```
-
-Rows include `setup_reason`, a compact explanation such as:
-
-```text
-52W base, 31% depth, 93% recovery, -2.1% from pivot, 44% prior trend
-```
-
-Lifecycle UI code lives outside `home.py` in:
-
-```text
-Streamlit/base_lifecycle_pages.py
-```
-
-`home.py` only routes to the two lifecycle page render functions.
-
-## Open Suggestions / Notes
-
-- UI now keeps lifecycle review focused on `Base Phase` and `Tracking Phase`.
-- Add future suggestions below this line.
-- Keep proposed changes concrete: condition, current value, suggested value, and reason.
+- trader review notes and validation decisions;
+- recovery/pivot-distance filters;
+- a separate post-success buy strategy;
+- scoring or ranking, if evidence later supports it;
+- finer secondary stages only when a real review need appears.

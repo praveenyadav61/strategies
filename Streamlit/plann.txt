@@ -44,11 +44,15 @@ daily EMA50 > daily EMA200
 52 weeks
 26 weeks
 
-3.2 The first structurally valid window is selected.
+3.2 Every window is evaluated independently when enough weekly history exists.
 
-3.3 The scanner stops searching smaller windows after finding a valid larger window.
+3.3 Every structurally valid window is saved as its own candidate.
 
-3.4 Each stock has at most one canonical current base.
+3.4 A stock can have up to three current candidates: one each for 104W, 52W and 26W.
+
+3.5 Each window candidate proceeds through recovery, pivot, breakout, success and failure independently.
+
+3.6 Lifecycle UI pages provide a window filter, with all available windows selected by default.
 
 
 4. LEFT-HIGH DETECTION
@@ -68,9 +72,9 @@ left_high = highest weekly High in the remaining selected window
 
 base_low = lowest weekly Low after the left high
 
-5.2 The base low must occur at least four weeks after the left high:
+5.2 The base low must occur at least six weeks after the left high:
 
-peak_to_low_weeks >= 4
+peak_to_low_weeks >= 6
 
 
 6. BASE-DEPTH CONDITION
@@ -254,43 +258,46 @@ base_id =
 
 If a valid distinct handle exists:
     selected_pivot = handle_high
-    pivot_source = HANDLE
+    pivot_source = DAILY_HANDLE
 
 Otherwise:
     selected_pivot = left_high
     pivot_source = LEFT_HIGH
 
-14.3 If the handle pivot is within 2% of the left high:
-
-pivot_source = LEFT_HIGH_HANDLE_MERGED
-selected_pivot = left_high
+14.3 A temporary daily handle candidate never replaces the left high. It must
+complete five later daily sessions within the pullback limit first.
 
 14.4 Range-high, close-high, resistance-cluster and scored swing pivots are not used.
 
 
 15. HANDLE CONDITIONS
 
-15.1 Handle lookback:
+15.1 Handle source:
 
-10 completed weekly candles
+Completed daily candles after the actual base low.
 
-15.2 Minimum handle pullback:
+15.2 Candidate update:
 
-3%
+The first daily High in the 85%-110% recovery zone becomes the candidate.
+Any higher daily High replaces it and restarts confirmation. No minimum
+pullback is required.
 
 15.3 Maximum handle pullback:
 
 handle_max_pullback_pct = base_depth / 3
 
-15.4 Minimum handle duration:
+15.4 Handle confirmation:
 
-2 weeks
+5 completed daily sessions after the candidate-high candle
 
 15.5 Valid handle-high range:
 
-85% to 105% of the left high
+85% to 110% recovery of the base depth
 
-15.6 A selected handle is invalidated before breakout if price closes below its handle low.
+minimum handle pivot = base low + (0.85 * base depth price)
+maximum handle pivot = base low + (1.10 * base depth price)
+
+15.6 A candidate is invalidated when its pullback exceeds one third of base depth.
 
 15.7 When invalidated, pivot selection returns to the left high.
 
@@ -301,7 +308,7 @@ handle_max_pullback_pct = base_depth / 3
 
 breakout_buffer = max(
     0.5% of selected_pivot,
-    0.20 × setup weekly ATR
+    0.20 × pivot-candle daily ATR(14)
 )
 
 16.2 Confirmation level:
@@ -311,10 +318,11 @@ confirmation_level =
 
 16.3 Breakout crossing:
 
-previous weekly close <= confirmation_level
-current weekly close  > confirmation_level
+previous daily close <= confirmation_level
+current daily close  > confirmation_level
 
-16.4 The first weekly candle after the base low is eligible to confirm a fallback left-high breakout.
+16.4 The left high is eligible immediately after the base low and remains active
+until a five-session daily handle is ready.
 
 16.5 The first qualifying crossing sets:
 
@@ -373,12 +381,12 @@ success_level = max(
 
 18.3 Successful breakout occurs when:
 
-post-breakout weekly close > success_level
+post-breakout daily close > success_level
 
 18.4 On the first qualifying candle:
 
 breakout_success = True
-breakout_success_date = qualifying weekly date
+breakout_success_date = qualifying daily date
 journey_stage = SUCCESSFUL_BREAKOUT
 
 18.5 Success is historical and latched.
@@ -392,7 +400,7 @@ journey_stage = SUCCESSFUL_BREAKOUT
 
 failure_buffer = max(
     1% of selected_pivot,
-    0.25 × frozen setup weekly ATR
+    0.25 × breakout-day daily ATR(14)
 )
 
 19.2 Hard-failure level:
@@ -403,10 +411,10 @@ hard_failure_level =
 19.3 A confirmed breakout fails when either condition occurs:
 
 Condition A:
-    one weekly close < hard_failure_level
+    one daily close < hard_failure_level
 
 Condition B:
-    two consecutive weekly closes < breakout_range_low
+    two consecutive daily closes < breakout_range_low
 
 19.4 One marginal close below breakout_range_low but above hard_failure_level is only a range-breach warning.
 
@@ -505,13 +513,13 @@ On Friday:
 
 On every fresh scan:
 
-1. Scan each stock in 104/52/26 order.
-2. Keep its largest structurally valid base.
+1. Scan every available 104/52/26 window independently.
+2. Keep every structurally valid window candidate.
 3. Calculate recovery from the latest daily close.
 4. Ignore new tracking entry below 40%.
 5. Build base_id for a 40%+ candidate.
 6. Check active and archived tracking data.
-7. Add the row when base_id is new and the symbol has no active base.
+7. Add every row whose window-aware base_id is new.
 8. Update every active row from current price data.
 9. Append updated rows to tracking history.
 
@@ -531,31 +539,28 @@ On every fresh scan:
 
 27. DUPLICATE PREVENTION
 
-27.1 Only one active base is currently allowed per symbol.
+27.1 Multiple window bases can be active for the same symbol.
 
-27.2 The same base_id cannot be added twice.
+27.2 base_id includes Symbol, base window, left-high date and base-low date.
 
-27.3 An archived base_id cannot be re-added.
+27.3 The same window-aware base_id cannot be added twice.
 
-27.4 A different base_id can enter after the previous active base has been archived.
+27.4 An archived base_id cannot be re-added.
+
+27.5 A different window or different left-high/base-low structure can enter independently.
 
 
-28. CURRENT NEW-BASE LIMITATION
+28. MULTI-WINDOW LIFECYCLE
 
-28.1 If a symbol already has an active base, a newly detected base for the same symbol is ignored.
+28.1 Each valid 104W, 52W and 26W candidate has its own base_id and lifecycle history.
 
-28.2 This affects stocks that successfully break out and later form another base.
+28.2 A success or failure in one window does not overwrite another window's state.
 
-28.3 SUCCESSFUL_BREAKOUT currently remains active indefinitely unless it later fails.
+28.3 The Journey page can show the same symbol in several rows when several windows qualify.
 
-28.4 Therefore, a second base cannot enter while the older successful base remains active.
+28.4 Window filters allow the trader to isolate 104W, 52W or 26W candidates.
 
-28.5 Required future improvement:
-
-SUCCESSFUL_BREAKOUT
-    → retain for a defined post-success period
-    → move old lifecycle to COMPLETED
-    → permit a new base_id for the same symbol
+28.5 A future COMPLETED state is still needed to formally close successful old structures.
 
 
 29. LIFECYCLE JOURNEY PAGE
@@ -571,6 +576,8 @@ FAILED is excluded from this page.
 NOT_TRACKED is excluded from this page.
 
 Base Phase and Tracking Phase remain available for detailed diagnosis.
+
+Lifecycle Journey, Base Phase, Tracking Phase and Review Funnel include a base-window filter.
 
 
 30. NON-HARD INFORMATIONAL FIELDS

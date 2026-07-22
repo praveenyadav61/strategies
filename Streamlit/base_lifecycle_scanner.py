@@ -12,6 +12,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from data_layer.data_engine import DataEngine
+from base_structure_identity import bases_are_equivalent, consolidate_equivalent_bases
 from modular_base_scanner import ScanStats, calculate_cup_metrics
 
 
@@ -35,6 +36,11 @@ STAGE_KEYS = [
     "rejected",
 ]
 
+# Handle highs are eligible from 85% through 110% recovery of base depth.
+# These are strategy constants, not replay command-line controls.
+PIVOT_MIN_BASE_RECOVERY = 0.85
+PIVOT_MAX_BASE_RECOVERY = 1.10
+
 DEFAULT_PARAMS = {
     "MIN_WEEKS": 8,
     "MIN_BASE_DURATION_WEEKS": 12,
@@ -47,21 +53,26 @@ DEFAULT_PARAMS = {
     "RECOVERY_MIN": 0.40,
     "TRACKING_ELIGIBLE_RECOVERY_MIN": 0.40,
     "BREAKOUT_CONSIDERATION_RECOVERY_MIN": 0.85,
-    "STRATEGY_VERSION": "base_lifecycle_v2",
+    "STRATEGY_VERSION": "base_lifecycle_v5_daily_handle",
     "MIN_PRIOR_UPTREND_PCT": 0.20,
     "PRIOR_UPTREND_DEPTH_MULTIPLIER": 1.0,
     "PRIOR_UPTREND_LOOKBACK_RATIO": 0.50,
     "PRIOR_UPTREND_MIN_LOOKBACK_WEEKS": 12,
     "PRIOR_UPTREND_MAX_LOOKBACK_WEEKS": 52,
     "PRIOR_UPTREND_MIN_ADVANCE_WEEKS": 4,
-    "MIN_PEAK_TO_LOW_WEEKS": 4,
+    "MIN_PEAK_TO_LOW_WEEKS": 6,
+    "EQUIVALENT_BASE_LEFT_HIGH_MAX_WEEKS": 2,
+    "EQUIVALENT_BASE_LOW_MAX_WEEKS": 1,
+    "EQUIVALENT_BASE_LEFT_HIGH_PRICE_TOLERANCE_PCT": 0.05,
+    "EQUIVALENT_BASE_LOW_PRICE_TOLERANCE_PCT": 0.03,
     "ATR_WINDOW": 14,
     "COMPRESSION_LOOKBACK": 10,
     "TRACKING_HANDLE_LOOKBACK_WEEKS": 10,
     "TRACKING_HANDLE_MIN_PULLBACK_PCT": 0.03,
     "HANDLE_MIN_DURATION_WEEKS": 2,
-    "PIVOT_MIN_LEFT_HIGH_RATIO": 0.85,
-    "PIVOT_MAX_LEFT_HIGH_RATIO": 1.05,
+    "DAILY_HANDLE_CONFIRMATION_SESSIONS": 5,
+    "PIVOT_MIN_BASE_RECOVERY": PIVOT_MIN_BASE_RECOVERY,
+    "PIVOT_MAX_BASE_RECOVERY": PIVOT_MAX_BASE_RECOVERY,
     "HANDLE_MAJOR_MERGE_TOLERANCE_PCT": 0.02,
     "BREAKOUT_PRICE_BUFFER_PCT": 0.005,
     "BREAKOUT_ATR_BUFFER_MULTIPLIER": 0.20,
@@ -335,6 +346,7 @@ def check_lifecycle_conditions(
     stage_results=None,
     signal_close=None,
     signal_as_of_date=None,
+    daily_df=None,
 ):
     try:
         stock_symbol = normalize_stock_symbol(symbol)
@@ -381,14 +393,14 @@ def check_lifecycle_conditions(
 
         stats.ath_filtered.append(symbol)
 
-        if peak_to_low_weeks < params.get("MIN_PEAK_TO_LOW_WEEKS", 4):
+        if peak_to_low_weeks < params.get("MIN_PEAK_TO_LOW_WEEKS", 6):
             record_stage(
                 stage_results,
                 "rejected",
                 {
                     **evaluated_row,
                     "failure_reason": "base_low_too_close_to_left_high",
-                    "min_peak_to_low_weeks": float(params.get("MIN_PEAK_TO_LOW_WEEKS", 4)),
+                    "min_peak_to_low_weeks": float(params.get("MIN_PEAK_TO_LOW_WEEKS", 6)),
                 },
             )
             return None
@@ -494,6 +506,9 @@ def check_lifecycle_conditions(
             depth,
             params,
             tracking_eligible=tracking_eligible,
+            daily_window=daily_df,
+            base_low=float(bottom_price),
+            base_low_date=bottom_idx,
         )
         base_end_date, base_end_reason = resolve_base_end(
             peak_idx,
@@ -626,7 +641,9 @@ def check_lifecycle_conditions(
             "structure_as_of_date": window.index[-1],
             "signal_as_of_date": pd.to_datetime(signal_as_of_date, errors="coerce"),
             "journey_stage": journey_stage,
-            "strategy_version": params.get("STRATEGY_VERSION", "base_lifecycle_v2"),
+            "strategy_version": params.get(
+                "STRATEGY_VERSION", "base_lifecycle_v5_daily_handle"
+            ),
             "base_window_weeks": int(scan_window_weeks),
             "tracking_eligible_recovery_min": float(params.get("TRACKING_ELIGIBLE_RECOVERY_MIN", 0.40)),
             "tracking_eligible": tracking_eligible,
@@ -644,12 +661,8 @@ def check_lifecycle_conditions(
         )
         result["distance_from_left_high_pct"] = float(distance_from_left_high_pct)
         result["distance_from_pivot_pct"] = float(distance_from_pivot_pct)
+        result["base_id"] = build_base_id(result)
         result["setup_reason"] = build_setup_reason(result)
-        # A structurally valid largest window remains canonical even below 40%.
-        # It is deliberately kept out of the visible candidate table until its
-        # daily-close recovery enters the tracked journey.
-        if journey_stage != "NOT_TRACKED":
-            record_stage(stage_results, "final_candidates", result)
         return result
 
     except Exception as exc:
@@ -700,13 +713,20 @@ def compare_snapshots(current_df, previous_df):
         dropped["weekly_change"] = "Dropped"
         return current, dropped
 
-    previous = previous_df.drop_duplicates("Symbol").set_index("Symbol")
+    current["_snapshot_key"] = current.apply(
+        lambda row: build_base_id(row.to_dict()), axis=1
+    )
+    previous_df = previous_df.copy()
+    previous_df["_snapshot_key"] = previous_df.apply(
+        lambda row: build_base_id(row.to_dict()), axis=1
+    )
+    previous = previous_df.drop_duplicates("_snapshot_key").set_index("_snapshot_key")
     for idx, row in current.iterrows():
-        symbol = row["Symbol"]
-        if symbol not in previous.index:
+        snapshot_key = row["_snapshot_key"]
+        if snapshot_key not in previous.index:
             continue
 
-        prev_row = previous.loc[symbol]
+        prev_row = previous.loc[snapshot_key]
         previous_stage = prev_row.get("journey_stage")
         current_stage = row.get("journey_stage")
         if previous_stage != current_stage:
@@ -714,11 +734,16 @@ def compare_snapshots(current_df, previous_df):
         else:
             current.at[idx, "weekly_change"] = "Continued"
 
-    dropped = previous_df[~previous_df["Symbol"].isin(set(current["Symbol"]))].copy()
+    dropped = previous_df[
+        ~previous_df["_snapshot_key"].isin(set(current["_snapshot_key"]))
+    ].copy()
     if not dropped.empty:
         dropped["weekly_change"] = "Dropped"
 
-    return current, dropped
+    return (
+        current.drop(columns="_snapshot_key"),
+        dropped.drop(columns="_snapshot_key"),
+    )
 
 
 def save_scan_snapshot(results_df, all_windows_df, stage_results=None, scan_dir=SCAN_HISTORY_DIR, scan_date_label=None):
@@ -769,7 +794,12 @@ def build_base_id(row):
         value.strftime("%Y%m%d") if pd.notna(value) else "na"
         for value in [left_high_date, base_low_date]
     ]
-    return "|".join([normalize_stock_symbol(row.get("Symbol")), *date_parts])
+    window_value = row.get("base_window_weeks", row.get("scan_window_weeks"))
+    numeric_window = pd.to_numeric(window_value, errors="coerce")
+    window_part = str(int(numeric_window)) if pd.notna(numeric_window) else "na"
+    return "|".join(
+        [normalize_stock_symbol(row.get("Symbol")), f"{window_part}W", *date_parts]
+    )
 
 
 def normalize_tracking_dates(df):
@@ -790,6 +820,10 @@ def normalize_tracking_dates(df):
         "left_high_pivot_date",
         "handle_high_date",
         "handle_low_date",
+        "daily_handle_candidate_date",
+        "daily_handle_low_date",
+        "daily_handle_confirmation_date",
+        "daily_base_low_date",
         "breakout_success_date",
         "structure_as_of_date",
         "signal_as_of_date",
@@ -801,23 +835,33 @@ def normalize_tracking_dates(df):
     return normalized
 
 
+def consolidate_tracking_structures(df, params=None):
+    """Remove duplicate active/archive rows produced by overlapping windows."""
+    if df is None or df.empty or "Symbol" not in df.columns:
+        return df
+    consolidated = []
+    for _, symbol_rows in df.groupby("Symbol", dropna=False, sort=False):
+        consolidated.extend(
+            consolidate_equivalent_bases(
+                symbol_rows.to_dict("records"), params=params
+            )
+        )
+    return pd.DataFrame(consolidated).reset_index(drop=True)
+
+
 def prepare_new_tracking_rows(results_df, as_of_date, active_df, archived_df):
     if results_df is None or results_df.empty or "Symbol" not in results_df.columns:
         return pd.DataFrame()
 
     existing_ids = set()
-    active_symbols = set()
-    if active_df is not None and not active_df.empty and "Symbol" in active_df.columns:
-        active_symbols = {
-            normalize_stock_symbol(symbol)
-            for symbol in active_df["Symbol"].dropna().astype(str)
-        }
+    existing_structures = []
     for existing_df in [active_df, archived_df]:
         if existing_df is not None and not existing_df.empty and "base_id" in existing_df.columns:
             existing_ids.update(existing_df["base_id"].dropna().astype(str))
         if existing_df is not None and not existing_df.empty:
             for _, existing_row in existing_df.iterrows():
                 existing_ids.add(build_base_id(existing_row.to_dict()))
+                existing_structures.append(existing_row.to_dict())
 
     new_rows = []
     scan_date = pd.to_datetime(as_of_date)
@@ -832,10 +876,10 @@ def prepare_new_tracking_rows(results_df, as_of_date, active_df, archived_df):
             continue
 
         row["Symbol"] = normalize_stock_symbol(row.get("Symbol"))
-        if row["Symbol"] in active_symbols:
-            continue
         base_id = build_base_id(row)
         if base_id in existing_ids:
+            continue
+        if any(bases_are_equivalent(existing, row) for existing in existing_structures):
             continue
         row.update(
             {
@@ -853,7 +897,7 @@ def prepare_new_tracking_rows(results_df, as_of_date, active_df, archived_df):
         row["setup_reason"] = build_setup_reason(row)
         new_rows.append(row)
         existing_ids.add(base_id)
-        active_symbols.add(row["Symbol"])
+        existing_structures.append(row)
 
     return pd.DataFrame(new_rows)
 
@@ -952,10 +996,32 @@ def crossed_confirmation_level(previous_close, current_close, confirmation_level
     )
 
 
+def calculate_pivot_zone(left_high, base_depth, params):
+    """Return the valid pivot band as recovery multiples of base depth."""
+    left_high = float(left_high)
+    base_depth_price = left_high * float(base_depth)
+    base_low = left_high - base_depth_price
+    minimum_recovery = float(
+        params.get("PIVOT_MIN_BASE_RECOVERY", PIVOT_MIN_BASE_RECOVERY)
+    )
+    maximum_recovery = float(
+        params.get("PIVOT_MAX_BASE_RECOVERY", PIVOT_MAX_BASE_RECOVERY)
+    )
+    return {
+        "base_depth_price": float(base_depth_price),
+        "implied_base_low": float(base_low),
+        "pivot_min_price": float(base_low + minimum_recovery * base_depth_price),
+        "pivot_max_price": float(base_low + maximum_recovery * base_depth_price),
+        "pivot_min_base_recovery": minimum_recovery,
+        "pivot_max_base_recovery": maximum_recovery,
+    }
+
+
 def calculate_pivot_candidate_snapshot(source, left_high, left_high_date, base_depth, params):
     """Select one actionable pivot: a valid handle, otherwise the left high."""
-    pivot_min = float(left_high) * float(params.get("PIVOT_MIN_LEFT_HIGH_RATIO", 0.85))
-    pivot_max = float(left_high) * float(params.get("PIVOT_MAX_LEFT_HIGH_RATIO", 1.05))
+    pivot_zone = calculate_pivot_zone(left_high, base_depth, params)
+    pivot_min = pivot_zone["pivot_min_price"]
+    pivot_max = pivot_zone["pivot_max_price"]
     handle_max_pullback_pct = float(base_depth) / 3.0
     candidates = {
         "left_high_pivot": float(left_high),
@@ -974,6 +1040,8 @@ def calculate_pivot_candidate_snapshot(source, left_high, left_high_date, base_d
         "major_pivot": float(left_high),
         "major_pivot_date": left_high_date,
         "setup_atr": np.nan,
+        "handle_pivot_base_recovery": np.nan,
+        **pivot_zone,
     }
     if source is None or source.empty:
         return candidates
@@ -987,7 +1055,12 @@ def calculate_pivot_candidate_snapshot(source, left_high, left_high_date, base_d
     )
     handle_price = handle.get("handle_high_pivot", np.nan)
     if pd.notna(handle_price) and pivot_min <= float(handle_price) <= pivot_max:
+        handle_recovery = (
+            (float(handle_price) - pivot_zone["implied_base_low"])
+            / pivot_zone["base_depth_price"]
+        )
         candidates.update(handle)
+        candidates["handle_pivot_base_recovery"] = float(handle_recovery)
         merge_tolerance = float(params.get("HANDLE_MAJOR_MERGE_TOLERANCE_PCT", 0.02))
         if abs(float(handle_price) - float(left_high)) / float(left_high) <= merge_tolerance:
             candidates["pivot_source"] = "LEFT_HIGH_HANDLE_MERGED"
@@ -1054,6 +1127,312 @@ def calculate_breakout_metrics_from_date(window, pivot_price, breakout_date):
     return metrics
 
 
+def prepare_daily_handle_window(daily_window, base_low_date, atr_window=14):
+    """Return completed daily bars after the actual low inside the base-low week."""
+    if daily_window is None or daily_window.empty:
+        return pd.DataFrame(), pd.NaT
+
+    daily = daily_window.copy()
+    daily.index = pd.to_datetime(daily.index)
+    daily = daily.sort_index()
+    if isinstance(daily.columns, pd.MultiIndex):
+        daily.columns = daily.columns.get_level_values(0)
+    daily = daily.loc[:, ~daily.columns.duplicated()]
+    required = {"High", "Low", "Close"}
+    if not required.issubset(daily.columns):
+        return pd.DataFrame(), pd.NaT
+
+    previous_close = daily["Close"].shift(1)
+    true_range = pd.concat(
+        [
+            daily["High"] - daily["Low"],
+            (daily["High"] - previous_close).abs(),
+            (daily["Low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    daily["daily_atr_14"] = true_range.rolling(
+        int(atr_window), min_periods=1
+    ).mean()
+
+    weekly_low_date = pd.to_datetime(base_low_date, errors="coerce")
+    if pd.isna(weekly_low_date):
+        return daily, daily.index[0]
+    base_low_week = daily.loc[
+        (daily.index >= weekly_low_date - pd.Timedelta(days=6))
+        & (daily.index <= weekly_low_date)
+    ]
+    if base_low_week.empty:
+        eligible = daily[daily.index <= weekly_low_date]
+        resolved_low_date = eligible.index[-1] if not eligible.empty else daily.index[0]
+    else:
+        resolved_low_date = base_low_week["Low"].idxmin()
+    return daily[daily.index >= resolved_low_date].copy(), resolved_low_date
+
+
+def calculate_daily_handle_state(
+    daily_window,
+    left_high,
+    left_high_date,
+    base_low,
+    base_low_date,
+    base_depth,
+    params,
+):
+    """Replay one evolving daily handle while keeping the left high authoritative."""
+    pivot_zone = calculate_pivot_zone(left_high, base_depth, params)
+    daily, resolved_base_low_date = prepare_daily_handle_window(
+        daily_window,
+        base_low_date,
+        atr_window=params.get("ATR_WINDOW", 14),
+    )
+    left_high = float(left_high)
+    base_low = float(base_low)
+    confirmation_sessions = int(
+        params.get("DAILY_HANDLE_CONFIRMATION_SESSIONS", 5)
+    )
+    maximum_pullback = float(base_depth) / 3.0
+
+    left_atr_rows = daily[daily.index <= pd.to_datetime(left_high_date, errors="coerce")]
+    left_setup_atr = (
+        float(left_atr_rows["daily_atr_14"].iloc[-1])
+        if not left_atr_rows.empty
+        else (
+            float(daily["daily_atr_14"].iloc[0])
+            if not daily.empty
+            else np.nan
+        )
+    )
+    left_snapshot = {
+        "left_high_pivot": left_high,
+        "left_high_pivot_date": pd.to_datetime(left_high_date, errors="coerce"),
+        "handle_high_pivot": np.nan,
+        "handle_high_date": pd.NaT,
+        "handle_low": np.nan,
+        "handle_low_date": pd.NaT,
+        "handle_pullback_pct": np.nan,
+        "handle_max_pullback_pct": maximum_pullback,
+        "handle_duration_weeks": np.nan,
+        "selected_pivot": left_high,
+        "selected_pivot_date": pd.to_datetime(left_high_date, errors="coerce"),
+        "pivot_source": "LEFT_HIGH",
+        "major_pivot": left_high,
+        "major_pivot_date": pd.to_datetime(left_high_date, errors="coerce"),
+        "setup_atr": left_setup_atr,
+        "handle_pivot_base_recovery": np.nan,
+        **pivot_zone,
+    }
+    state_fields = {
+        "daily_handle_state": "LEFT_HIGH_ACTIVE",
+        "daily_handle_candidate_pivot": np.nan,
+        "daily_handle_candidate_date": pd.NaT,
+        "daily_handle_low": np.nan,
+        "daily_handle_low_date": pd.NaT,
+        "daily_handle_pullback_pct": np.nan,
+        "daily_handle_sessions_after_pivot": 0,
+        "daily_handle_confirmation_sessions": confirmation_sessions,
+        "daily_handle_confirmation_date": pd.NaT,
+        "daily_handle_valid": False,
+        "daily_handle_breakout_eligible": True,
+        "daily_base_low_date": resolved_base_low_date,
+    }
+    if daily.empty or len(daily) < 2:
+        return {
+            **left_snapshot,
+            **state_fields,
+            "daily_breakout_date": pd.NaT,
+            "daily_breakout_atr": np.nan,
+            "daily_event_window": daily,
+        }
+
+    candidate = None
+    confirmed_handle = None
+    handle_state = "LEFT_HIGH_ACTIVE"
+    breakout_date = pd.NaT
+    breakout_atr = np.nan
+    selected_at_breakout = None
+    latest_candidate_metrics = state_fields.copy()
+
+    for current_pos in range(1, len(daily)):
+        current = daily.iloc[current_pos]
+        previous_close = float(daily["Close"].iloc[current_pos - 1])
+        current_close = float(current["Close"])
+        current_high = float(current["High"])
+
+        if handle_state == "HANDLE_READY" and confirmed_handle is not None:
+            active_snapshot = confirmed_handle
+            breakout_eligible = True
+        elif handle_state == "HANDLE_REFORMING" and confirmed_handle is not None:
+            active_snapshot = confirmed_handle
+            breakout_eligible = False
+        else:
+            active_snapshot = left_snapshot
+            breakout_eligible = True
+
+        active_pivot = float(active_snapshot["selected_pivot"])
+        active_buffer = calculate_level_buffer(
+            active_pivot,
+            active_snapshot.get("setup_atr", np.nan),
+            params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
+            params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
+        )
+        if breakout_eligible and crossed_confirmation_level(
+            previous_close,
+            current_close,
+            active_pivot + float(active_buffer),
+        ):
+            breakout_date = daily.index[current_pos]
+            breakout_atr = float(current.get("daily_atr_14", np.nan))
+            selected_at_breakout = active_snapshot.copy()
+            handle_state = "BREAKOUT_CONFIRMED"
+            latest_candidate_metrics.update(
+                {
+                    "daily_handle_state": handle_state,
+                    "daily_handle_breakout_eligible": False,
+                }
+            )
+            break
+
+        if candidate is None:
+            recovery = (
+                (current_high - base_low) / (left_high - base_low)
+                if left_high > base_low
+                else np.nan
+            )
+            if (
+                pd.notna(recovery)
+                and pivot_zone["pivot_min_base_recovery"]
+                <= float(recovery)
+                <= pivot_zone["pivot_max_base_recovery"]
+            ):
+                candidate = {
+                    "price": current_high,
+                    "date": daily.index[current_pos],
+                    "position": current_pos,
+                    "atr": float(current.get("daily_atr_14", np.nan)),
+                    "recovery": float(recovery),
+                }
+                handle_state = "HANDLE_CANDIDATE"
+                latest_candidate_metrics.update(
+                    {
+                        "daily_handle_state": handle_state,
+                        "daily_handle_candidate_pivot": float(candidate["price"]),
+                        "daily_handle_candidate_date": candidate["date"],
+                        "daily_handle_sessions_after_pivot": 0,
+                        "daily_handle_valid": False,
+                        "daily_handle_breakout_eligible": False,
+                    }
+                )
+            continue
+
+        if current_high > float(candidate["price"]):
+            recovery = (
+                (current_high - base_low) / (left_high - base_low)
+                if left_high > base_low
+                else np.nan
+            )
+            if float(recovery) > pivot_zone["pivot_max_base_recovery"]:
+                candidate = None
+                confirmed_handle = None
+                handle_state = "HANDLE_INVALIDATED"
+                latest_candidate_metrics["daily_handle_state"] = handle_state
+                continue
+            candidate = {
+                "price": current_high,
+                "date": daily.index[current_pos],
+                "position": current_pos,
+                "atr": float(current.get("daily_atr_14", np.nan)),
+                "recovery": float(recovery),
+            }
+            handle_state = (
+                "HANDLE_REFORMING"
+                if confirmed_handle is not None
+                else "HANDLE_CANDIDATE"
+            )
+            latest_candidate_metrics.update(
+                {
+                    "daily_handle_state": handle_state,
+                    "daily_handle_candidate_pivot": float(candidate["price"]),
+                    "daily_handle_candidate_date": candidate["date"],
+                    "daily_handle_low": np.nan,
+                    "daily_handle_low_date": pd.NaT,
+                    "daily_handle_pullback_pct": np.nan,
+                    "daily_handle_sessions_after_pivot": 0,
+                    "daily_handle_valid": False,
+                    "daily_handle_breakout_eligible": False,
+                }
+            )
+            continue
+
+        after_candidate = daily.iloc[int(candidate["position"]) + 1 : current_pos + 1]
+        sessions_after_pivot = current_pos - int(candidate["position"])
+        handle_low_date = after_candidate["Low"].idxmin()
+        handle_low = float(after_candidate.loc[handle_low_date, "Low"])
+        pullback_pct = (float(candidate["price"]) - handle_low) / float(
+            candidate["price"]
+        )
+        latest_candidate_metrics = {
+            **latest_candidate_metrics,
+            "daily_handle_state": handle_state,
+            "daily_handle_candidate_pivot": float(candidate["price"]),
+            "daily_handle_candidate_date": candidate["date"],
+            "daily_handle_low": handle_low,
+            "daily_handle_low_date": handle_low_date,
+            "daily_handle_pullback_pct": float(pullback_pct),
+            "daily_handle_sessions_after_pivot": int(sessions_after_pivot),
+            "daily_handle_valid": False,
+            "daily_handle_breakout_eligible": False,
+        }
+
+        if pullback_pct > maximum_pullback:
+            candidate = None
+            confirmed_handle = None
+            handle_state = "HANDLE_INVALIDATED"
+            latest_candidate_metrics["daily_handle_state"] = handle_state
+            continue
+
+        if sessions_after_pivot >= confirmation_sessions:
+            confirmation_date = daily.index[current_pos]
+            confirmed_handle = {
+                **left_snapshot,
+                "handle_high_pivot": float(candidate["price"]),
+                "handle_high_date": candidate["date"],
+                "handle_low": handle_low,
+                "handle_low_date": handle_low_date,
+                "handle_pullback_pct": float(pullback_pct),
+                "handle_duration_weeks": round(sessions_after_pivot / 5.0, 1),
+                "selected_pivot": float(candidate["price"]),
+                "selected_pivot_date": candidate["date"],
+                "pivot_source": "DAILY_HANDLE",
+                "major_pivot": float(candidate["price"]),
+                "major_pivot_date": candidate["date"],
+                "setup_atr": float(candidate["atr"]),
+                "handle_pivot_base_recovery": float(candidate["recovery"]),
+            }
+            handle_state = "HANDLE_READY"
+            latest_candidate_metrics.update(
+                {
+                    "daily_handle_state": handle_state,
+                    "daily_handle_confirmation_date": confirmation_date,
+                    "daily_handle_valid": True,
+                    "daily_handle_breakout_eligible": True,
+                }
+            )
+
+    selected = selected_at_breakout or confirmed_handle or left_snapshot
+    latest_candidate_metrics["daily_handle_state"] = handle_state
+    if confirmed_handle is not None and handle_state == "HANDLE_READY":
+        latest_candidate_metrics["daily_handle_valid"] = True
+        latest_candidate_metrics["daily_handle_breakout_eligible"] = True
+    return {
+        **selected,
+        **latest_candidate_metrics,
+        "daily_breakout_date": breakout_date,
+        "daily_breakout_atr": breakout_atr,
+        "daily_event_window": daily,
+    }
+
+
 def calculate_pivot_lifecycle(
     window,
     left_high,
@@ -1062,69 +1441,102 @@ def calculate_pivot_lifecycle(
     base_depth,
     params,
     tracking_eligible=False,
+    daily_window=None,
+    base_low=None,
+    base_low_date=None,
 ):
     """Run the single-pivot lifecycle using a valid handle or the left high."""
-    latest_close = float(window["Close"].iloc[-1])
-    empty_source = window.iloc[0:0]
-    pre_current_snapshot = calculate_pivot_candidate_snapshot(
-        empty_source, left_high, left_high_date, base_depth, params
-    )
-    frozen_snapshot = None
-    breakout_date = pd.NaT
-    breakout_atr = np.nan
+    use_daily_handle = daily_window is not None and not daily_window.empty
+    event_window = daily_window if use_daily_handle else window
+    latest_close = float(event_window["Close"].iloc[-1])
+    daily_handle_fields = {}
 
-    # A stock can cross the left-high confirmation level on the first weekly
-    # candle after its base low. Handle construction still needs later bars,
-    # but the fallback left-high breakout must not be skipped.
-    start_pos = max(int(bottom_idx_i) + 1, 1)
-    for current_pos in range(start_pos, len(window)):
-        source = window.iloc[int(bottom_idx_i) + 1:current_pos].copy()
-        snapshot = calculate_pivot_candidate_snapshot(
-            source, left_high, left_high_date, base_depth, params
+    if use_daily_handle:
+        daily_state = calculate_daily_handle_state(
+            daily_window,
+            left_high,
+            left_high_date,
+            base_low,
+            base_low_date,
+            base_depth,
+            params,
         )
-        selected_pivot = float(snapshot["selected_pivot"])
-        breakout_buffer = calculate_level_buffer(
-            selected_pivot,
-            snapshot.get("setup_atr", np.nan),
-            params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
-            params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
-        )
-        confirmation_level = selected_pivot + float(breakout_buffer)
-        if crossed_confirmation_level(
-            window["Close"].iloc[current_pos - 1],
-            window["Close"].iloc[current_pos],
-            confirmation_level,
-        ):
-            frozen_snapshot = snapshot.copy()
-            breakout_date = window.index[current_pos]
-            current_atr = window.iloc[current_pos].get("atr", np.nan)
-            breakout_atr = (
-                float(current_atr)
-                if pd.notna(current_atr)
-                else snapshot.get("setup_atr", np.nan)
-            )
-            break
-        pre_current_snapshot = snapshot
-
-    if frozen_snapshot is not None:
-        selected = frozen_snapshot
+        selected = {
+            key: value
+            for key, value in daily_state.items()
+            if not key.startswith("daily_")
+        }
+        daily_handle_fields = {
+            key: value
+            for key, value in daily_state.items()
+            if key.startswith("daily_") and key != "daily_event_window"
+        }
+        breakout_date = daily_state["daily_breakout_date"]
+        breakout_atr = daily_state["daily_breakout_atr"]
+        event_window = daily_state["daily_event_window"]
     else:
-        if len(window) > int(bottom_idx_i) + 1:
-            selected = calculate_pivot_candidate_snapshot(
-                window.iloc[int(bottom_idx_i) + 1:-1].copy(),
-                left_high,
-                left_high_date,
-                base_depth,
-                params,
-            )
-        else:
-            selected = pre_current_snapshot
+        empty_source = window.iloc[0:0]
+        pre_current_snapshot = calculate_pivot_candidate_snapshot(
+            empty_source, left_high, left_high_date, base_depth, params
+        )
+        frozen_snapshot = None
+        breakout_date = pd.NaT
+        breakout_atr = np.nan
 
+        # Compatibility path for callers that provide weekly candles only.
+        start_pos = max(int(bottom_idx_i) + 1, 1)
+        for current_pos in range(start_pos, len(window)):
+            source = window.iloc[int(bottom_idx_i) + 1:current_pos].copy()
+            snapshot = calculate_pivot_candidate_snapshot(
+                source, left_high, left_high_date, base_depth, params
+            )
+            selected_pivot = float(snapshot["selected_pivot"])
+            breakout_buffer = calculate_level_buffer(
+                selected_pivot,
+                snapshot.get("setup_atr", np.nan),
+                params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
+                params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
+            )
+            confirmation_level = selected_pivot + float(breakout_buffer)
+            if crossed_confirmation_level(
+                window["Close"].iloc[current_pos - 1],
+                window["Close"].iloc[current_pos],
+                confirmation_level,
+            ):
+                frozen_snapshot = snapshot.copy()
+                breakout_date = window.index[current_pos]
+                current_atr = window.iloc[current_pos].get("atr", np.nan)
+                breakout_atr = (
+                    float(current_atr)
+                    if pd.notna(current_atr)
+                    else snapshot.get("setup_atr", np.nan)
+                )
+                break
+            pre_current_snapshot = snapshot
+
+        if frozen_snapshot is not None:
+            selected = frozen_snapshot
+        else:
+            if len(window) > int(bottom_idx_i) + 1:
+                selected = calculate_pivot_candidate_snapshot(
+                    window.iloc[int(bottom_idx_i) + 1:-1].copy(),
+                    left_high,
+                    left_high_date,
+                    base_depth,
+                    params,
+                )
+            else:
+                selected = pre_current_snapshot
+
+    daily_handle_state = daily_handle_fields.get("daily_handle_state")
     handle_invalidated = bool(
-        pd.isna(breakout_date)
-        and selected.get("pivot_source") == "HANDLE"
-        and pd.notna(selected.get("handle_low"))
-        and latest_close < float(selected["handle_low"])
+        daily_handle_state == "HANDLE_INVALIDATED"
+        or (
+            pd.isna(breakout_date)
+            and selected.get("pivot_source") == "HANDLE"
+            and pd.notna(selected.get("handle_low"))
+            and latest_close < float(selected["handle_low"])
+        )
     )
     if handle_invalidated:
         selected.update(
@@ -1169,12 +1581,12 @@ def calculate_pivot_lifecycle(
     hard_failure_level = breakout_range_low - float(failure_buffer)
 
     breakout_metrics = calculate_breakout_metrics_from_date(
-        window, selected_pivot, breakout_date
+        event_window, selected_pivot, breakout_date
     )
     post_breakout = (
-        window.loc[breakout_date:].copy()
+        event_window.loc[breakout_date:].copy()
         if pd.notna(breakout_date)
-        else window.iloc[0:0].copy()
+        else event_window.iloc[0:0].copy()
     )
     success_rows = post_breakout[post_breakout["Close"] > success_level]
     success_date = success_rows.index[0] if not success_rows.empty else pd.NaT
@@ -1254,7 +1666,9 @@ def calculate_pivot_lifecycle(
     elif pd.isna(breakout_date):
         if handle_invalidated:
             lifecycle_status = "RESETTING"
-        elif selected.get("pivot_source") == "HANDLE":
+        elif daily_handle_state == "HANDLE_REFORMING":
+            lifecycle_status = "RESETTING"
+        elif selected.get("pivot_source") in {"HANDLE", "DAILY_HANDLE"}:
             lifecycle_status = "HANDLE_READY"
         elif -0.05 <= distance_from_pivot_pct <= 0:
             lifecycle_status = "NEAR_PIVOT"
@@ -1299,6 +1713,7 @@ def calculate_pivot_lifecycle(
         "major_confirmation_level": float(confirmation_level),
         "major_failure_buffer": float(failure_buffer),
         "major_failure_level": float(hard_failure_level),
+        **daily_handle_fields,
         **breakout_metrics,
     }
 
@@ -1343,6 +1758,7 @@ def update_tracking_row(row, as_of_date, data_engine, params=None):
             else int(track_window["Low"].values.argmin())
         )
         left_high = float(updated.get("left_high", updated.get("left_high_pivot")))
+        base_low = float(updated.get("base_low", updated.get("base_low_pivot")))
         base_depth = float(updated.get("Depth", updated.get("depth")))
         pivot_lifecycle = calculate_pivot_lifecycle(
             track_window,
@@ -1352,10 +1768,12 @@ def update_tracking_row(row, as_of_date, data_engine, params=None):
             base_depth,
             params,
             tracking_eligible=True,
+            daily_window=daily,
+            base_low=base_low,
+            base_low_date=base_low_date,
         )
         lifecycle_status = pivot_lifecycle["lifecycle_status"]
         selected_pivot = float(pivot_lifecycle["selected_pivot"])
-        base_low = float(updated.get("base_low", updated.get("base_low_pivot")))
         recovery_pct = (
             (latest_close - base_low) / (left_high - base_low)
             if left_high > base_low
@@ -1421,7 +1839,9 @@ def update_tracking_row(row, as_of_date, data_engine, params=None):
                 "max_single_week_move_to_depth_ratio": float(
                     params.get("MAX_SINGLE_WEEK_MOVE_TO_DEPTH_RATIO", 0.50)
                 ),
-                "strategy_version": params.get("STRATEGY_VERSION", "base_lifecycle_v2"),
+                "strategy_version": params.get(
+                    "STRATEGY_VERSION", "base_lifecycle_v5_daily_handle"
+                ),
                 "base_window_weeks": int(
                     updated.get("base_window_weeks", updated.get("scan_window_weeks", 0))
                 ),
@@ -1442,6 +1862,8 @@ def update_tracking_store(results_df, as_of_date, data_path=DATA_PATH, tracking_
     active_df = normalize_tracking_dates(state["active"])
     history_df = normalize_tracking_dates(state["history"])
     archived_df = normalize_tracking_dates(state["archived"])
+    active_df = consolidate_tracking_structures(active_df, params=params)
+    archived_df = consolidate_tracking_structures(archived_df, params=params)
 
     new_tracking_df = prepare_new_tracking_rows(results_df, as_of_date, active_df, archived_df)
     if not new_tracking_df.empty:
@@ -1601,7 +2023,7 @@ class BaseLifecycleScanner:
                 return None
 
             weekly = calculate_cup_metrics(weekly, self.params)
-            selected_result = None
+            window_results = []
             for scan_window_weeks in ordered_base_windows(self.params):
                 if len(weekly) < scan_window_weeks:
                     record_stage(
@@ -1638,12 +2060,12 @@ class BaseLifecycleScanner:
                     stage_results=self.stage_results,
                     signal_close=float(close.iloc[-1]),
                     signal_as_of_date=df.index[-1],
+                    daily_df=df,
                 )
                 if res:
-                    selected_result = res
-                    break
+                    window_results.append(res)
 
-            if selected_result is None:
+            if not window_results:
                 record_stage(
                     self.stage_results,
                     "rejected",
@@ -1651,7 +2073,16 @@ class BaseLifecycleScanner:
                 )
                 return None
 
-            return selected_result, [selected_result]
+            # Smaller search windows are retained only when they reveal a
+            # genuinely different base. Equivalent structures use the largest
+            # matching search window as their canonical representation.
+            window_results = consolidate_equivalent_bases(
+                window_results, self.params
+            )
+            for result in window_results:
+                if result.get("journey_stage") != "NOT_TRACKED":
+                    record_stage(self.stage_results, "final_candidates", result)
+            return window_results[0], window_results
 
         except Exception as exc:
             self.logger.debug(f"{data_symbol} failed: {exc}")
@@ -1667,16 +2098,21 @@ class BaseLifecycleScanner:
             symbol = file_name.replace(".parquet", "")
             res = self.scan_symbol(symbol)
             if res:
-                best_result, window_results = res
+                _largest_result, window_results = res
                 all_window_results.extend(window_results)
-                if best_result.get("journey_stage") != "NOT_TRACKED":
-                    results.append(best_result)
+                results.extend(
+                    row
+                    for row in window_results
+                    if row.get("journey_stage") != "NOT_TRACKED"
+                )
 
         df = pd.DataFrame(results)
         self.all_window_results = pd.DataFrame(all_window_results)
         self.stage_results = stage_results_to_frames(self.stage_results)
         if not df.empty:
-            df = df.sort_values("Symbol", ascending=True).reset_index(drop=True)
+            df = df.sort_values(
+                ["Symbol", "base_window_weeks"], ascending=[True, False]
+            ).reset_index(drop=True)
         return df
 
 

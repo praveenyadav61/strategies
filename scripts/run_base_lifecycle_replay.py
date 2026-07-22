@@ -43,12 +43,6 @@ def build_params(args):
             "MIN_PEAK_TO_LOW_WEEKS": args.min_peak_to_low_weeks,
             "ATR_WINDOW": args.atr_window,
             "COMPRESSION_LOOKBACK": args.compression_lookback,
-            "TRACKING_HANDLE_LOOKBACK_WEEKS": args.tracking_handle_lookback,
-            "TRACKING_HANDLE_MIN_PULLBACK_PCT": args.tracking_handle_min_pullback / 100.0,
-            "HANDLE_MIN_DURATION_WEEKS": args.handle_min_duration,
-            "PIVOT_MIN_LEFT_HIGH_RATIO": args.pivot_min_left_high / 100.0,
-            "PIVOT_MAX_LEFT_HIGH_RATIO": args.pivot_max_left_high / 100.0,
-            "HANDLE_MAJOR_MERGE_TOLERANCE_PCT": args.handle_major_merge_tolerance / 100.0,
             "BREAKOUT_PRICE_BUFFER_PCT": args.breakout_price_buffer / 100.0,
             "BREAKOUT_ATR_BUFFER_MULTIPLIER": args.breakout_atr_buffer,
             "FAILURE_PRICE_BUFFER_PCT": args.failure_price_buffer / 100.0,
@@ -109,15 +103,9 @@ def main():
     parser.add_argument("--prior-uptrend-min-lookback", type=int, default=12)
     parser.add_argument("--prior-uptrend-max-lookback", type=int, default=52)
     parser.add_argument("--prior-uptrend-min-advance", type=int, default=4)
-    parser.add_argument("--min-peak-to-low-weeks", type=int, default=4)
+    parser.add_argument("--min-peak-to-low-weeks", type=int, default=6)
     parser.add_argument("--atr-window", type=int, default=14)
     parser.add_argument("--compression-lookback", type=int, default=10)
-    parser.add_argument("--tracking-handle-lookback", type=int, default=10)
-    parser.add_argument("--tracking-handle-min-pullback", type=float, default=3.0, help="Percent")
-    parser.add_argument("--handle-min-duration", type=int, default=2, help="Completed weeks")
-    parser.add_argument("--pivot-min-left-high", type=float, default=85.0, help="Percent of left high")
-    parser.add_argument("--pivot-max-left-high", type=float, default=105.0, help="Percent of left high")
-    parser.add_argument("--handle-major-merge-tolerance", type=float, default=2.0, help="Percent")
     parser.add_argument("--breakout-price-buffer", type=float, default=0.5, help="Percent")
     parser.add_argument("--breakout-atr-buffer", type=float, default=0.20, help="ATR multiplier")
     parser.add_argument("--failure-price-buffer", type=float, default=1.0, help="Percent")
