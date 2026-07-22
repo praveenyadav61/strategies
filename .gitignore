@@ -1,6 +1,4 @@
 /__pycache__
-data/static/custom_data_center.csv
-data/base_lifecycle_scans/
 **/__pycache__/**
 **/__pycache__/*
 Streamlit/__pycache__/base_formation.cpython-313.pyc
