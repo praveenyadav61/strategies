@@ -297,9 +297,17 @@ handle_max_pullback_pct = base_depth / 3
 minimum handle pivot = base low + (0.85 * base depth price)
 maximum handle pivot = base low + (1.10 * base depth price)
 
-15.6 A candidate is invalidated when its pullback exceeds one third of base depth.
+15.6 A pending candidate is discarded when its pullback exceeds one third of
+base depth. Discarding a replacement candidate does not delete an already
+confirmed active handle.
 
-15.7 When invalidated, pivot selection returns to the left high.
+15.7 A confirmed active handle returns to the left high only when the active
+handle's own post-handle pullback exceeds one third of base depth.
+
+15.8 A higher high after HANDLE_READY creates HANDLE_REPLACEMENT_PENDING. The
+existing confirmed handle remains the active, breakout-eligible pivot while the
+replacement completes a new five-session confirmation. If the replacement
+fails, the existing handle remains active.
 
 
 16. BREAKOUT CONFIRMATION
@@ -321,8 +329,9 @@ confirmation_level =
 previous daily close <= confirmation_level
 current daily close  > confirmation_level
 
-16.4 The left high is eligible immediately after the base low and remains active
-until a five-session daily handle is ready.
+16.4 Exactly one confirmed pivot is always active. The left high is active after
+the base low. A confirmed daily handle replaces it and remains active while any
+replacement candidate is pending. No state disables breakout detection.
 
 16.5 The first qualifying crossing sets:
 

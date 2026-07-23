@@ -589,6 +589,8 @@ def render_lifecycle_selected_details(selected_row):
         "daily_handle_confirmation_date",
         "daily_handle_valid",
         "daily_handle_breakout_eligible",
+        "daily_handle_invalidated",
+        "daily_handle_invalidation_date",
         "daily_base_low_date",
         "handle_low",
         "handle_low_date",

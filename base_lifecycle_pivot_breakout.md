@@ -70,9 +70,9 @@ There is no minimum pullback: a tight sideways range is allowed. If the lowest
 subsequent daily low creates a pullback greater than one third of base depth,
 the candidate is invalidated.
 
-The left high remains the active breakout pivot while the candidate is forming.
-After five completed sessions without a higher high and without excessive
-pullback, the candidate candle's daily high replaces it:
+The left high remains the active breakout pivot while the first candidate is
+forming. After five completed sessions without a higher high and without
+excessive pullback, the candidate candle's daily high replaces it:
 
 ```text
 pivot_source   = DAILY_HANDLE
@@ -86,11 +86,17 @@ pivot_source   = LEFT_HIGH
 selected_pivot = left_high
 ```
 
-If a higher high appears after `HANDLE_READY` without a closing breakout, the
-state becomes `HANDLE_REFORMING` and the five-session confirmation restarts.
-The previous ready handle remains stored, but breakout confirmation is disabled
-until the higher candidate is ready. Excessive pullback returns selection to
-the left high.
+If a higher high appears after `HANDLE_READY` without a closing breakout, it
+starts `HANDLE_REPLACEMENT_PENDING` and restarts the five-session count. The
+existing confirmed handle remains the one active, breakout-eligible pivot while
+the replacement is pending. If price closes through that pivot first, breakout
+freezes it. If the replacement completes five sessions, it becomes the new
+active pivot. Failure of the pending replacement does not delete the confirmed
+handle.
+
+A confirmed active handle returns to the left high only when that active
+handle's own pullback exceeds one third of base depth. Candidate failure and
+active-pivot invalidation are deliberately separate events.
 
 ## 4. Breakout confirmation
 
@@ -112,12 +118,16 @@ This correctly detects a close that moves from slightly above the raw pivot to
 above the buffered level. Comparing `previous_close` only with the raw pivot
 would miss that transition.
 
-Once a handle is ready, breakout is checked before processing a higher high.
-Therefore a daily close above the existing confirmation level freezes the
-existing pivot; the breakout candle cannot move its own pivot upward.
+Breakout is the first operation on every completed daily candle and always uses
+the one active confirmed pivot. Candidate creation, replacement, or failure can
+never disable this check. Therefore a daily close above the existing
+confirmation level freezes the existing pivot; the breakout candle cannot move
+its own pivot upward.
 
 The left-high pivot is breakout-eligible immediately after the base low and
-remains authoritative until a daily handle becomes ready.
+remains authoritative until a daily handle becomes ready. A ready handle then
+remains authoritative while any higher replacement candidate is evaluated. If
+the active handle itself is invalidated, the left high becomes active again.
 
 ## 5. Fixed post-breakout range
 

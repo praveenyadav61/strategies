@@ -457,6 +457,151 @@ class PivotLifecycleTests(unittest.TestCase):
         self.assertEqual(result["daily_handle_sessions_after_pivot"], 0)
         self.assertEqual(result["selected_pivot"], 100)
 
+    def test_replacement_candidate_keeps_confirmed_handle_breakout_eligible(self):
+        index = pd.date_range("2026-03-30", periods=9, freq="B")
+        closes = [71, 95, 94, 94, 94, 94, 94, 96, 101]
+        frame = pd.DataFrame(
+            {
+                "Open": closes,
+                "High": [72, 96, 95, 95, 95, 95, 95, 98, 102],
+                "Low": [70, 94, 93, 93, 93, 93, 93, 94, 96],
+                "Close": closes,
+                "Volume": 1_000,
+            },
+            index=index,
+        )
+
+        result = calculate_daily_handle_state(
+            frame,
+            left_high=100,
+            left_high_date=index[0] - pd.Timedelta(days=30),
+            base_low=70,
+            base_low_date=index[0],
+            base_depth=0.30,
+            params=DEFAULT_PARAMS,
+        )
+
+        self.assertEqual(result["daily_breakout_date"], index[-1])
+        self.assertEqual(result["selected_pivot"], 96)
+        self.assertEqual(result["pivot_source"], "DAILY_HANDLE")
+        self.assertEqual(result["daily_handle_state"], "BREAKOUT_CONFIRMED")
+
+    def test_replacement_candidate_does_not_replace_active_handle_early(self):
+        frame = daily_handle_frame().iloc[:18].copy()
+        frame.loc[frame.index[-1], ["High", "Low", "Close"]] = [97, 94, 95]
+
+        result = calculate_daily_handle_state(
+            frame,
+            left_high=100,
+            left_high_date=frame.index[0],
+            base_low=70,
+            base_low_date=frame.index[5],
+            base_depth=0.30,
+            params=DEFAULT_PARAMS,
+        )
+
+        self.assertEqual(result["daily_handle_state"], "HANDLE_REPLACEMENT_PENDING")
+        self.assertEqual(result["selected_pivot"], 96)
+        self.assertEqual(result["pivot_source"], "DAILY_HANDLE")
+        self.assertTrue(result["daily_handle_breakout_eligible"])
+
+    def test_failed_replacement_candidate_keeps_confirmed_handle(self):
+        frame = daily_handle_frame().iloc[:17].copy()
+        extra_dates = pd.date_range(frame.index[-1] + pd.offsets.BDay(), periods=2, freq="B")
+        extra = pd.DataFrame(
+            {
+                "Open": [95, 95],
+                "High": [97, 104],
+                "Low": [94, 94],
+                "Close": [95, 95],
+                "Volume": [1_000, 1_000],
+            },
+            index=extra_dates,
+        )
+        frame = pd.concat([frame, extra])
+
+        result = calculate_daily_handle_state(
+            frame,
+            left_high=100,
+            left_high_date=frame.index[0],
+            base_low=70,
+            base_low_date=frame.index[5],
+            base_depth=0.30,
+            params=DEFAULT_PARAMS,
+        )
+
+        self.assertEqual(result["daily_handle_state"], "HANDLE_READY")
+        self.assertEqual(result["selected_pivot"], 96)
+        self.assertEqual(result["pivot_source"], "DAILY_HANDLE")
+
+    def test_active_handle_invalidation_returns_to_left_high(self):
+        frame = daily_handle_frame().iloc[:17].copy()
+        invalidation_date = frame.index[-1] + pd.offsets.BDay()
+        frame.loc[invalidation_date, ["Open", "High", "Low", "Close", "Volume"]] = [
+            88,
+            90,
+            80,
+            85,
+            1_000,
+        ]
+
+        result = calculate_daily_handle_state(
+            frame,
+            left_high=100,
+            left_high_date=frame.index[0],
+            base_low=70,
+            base_low_date=frame.index[5],
+            base_depth=0.30,
+            params=DEFAULT_PARAMS,
+        )
+
+        self.assertEqual(result["daily_handle_state"], "LEFT_HIGH_ACTIVE")
+        self.assertEqual(result["selected_pivot"], 100)
+        self.assertEqual(result["pivot_source"], "LEFT_HIGH")
+        self.assertTrue(result["daily_handle_invalidated"])
+
+    def test_daily_gap_crosses_the_one_active_left_high_pivot(self):
+        index = pd.date_range("2026-06-01", periods=3, freq="B")
+        frame = pd.DataFrame(
+            {
+                "Open": [72, 96, 105],
+                "High": [74, 99, 110],
+                "Low": [70, 94, 104],
+                "Close": [72, 98, 108],
+                "Volume": [1_000, 1_000, 1_000],
+            },
+            index=index,
+        )
+
+        result = calculate_daily_handle_state(
+            frame,
+            left_high=100,
+            left_high_date=index[0] - pd.Timedelta(days=30),
+            base_low=70,
+            base_low_date=index[0],
+            base_depth=0.30,
+            params=DEFAULT_PARAMS,
+        )
+
+        self.assertEqual(result["daily_breakout_date"], index[-1])
+        self.assertEqual(result["selected_pivot"], 100)
+        self.assertEqual(result["pivot_source"], "LEFT_HIGH")
+
+    def test_every_daily_state_has_exactly_one_active_pivot(self):
+        frame = daily_handle_frame()
+        for end in range(2, len(frame) + 1):
+            result = calculate_daily_handle_state(
+                frame.iloc[:end],
+                left_high=100,
+                left_high_date=frame.index[0],
+                base_low=70,
+                base_low_date=frame.index[5],
+                base_depth=0.30,
+                params=DEFAULT_PARAMS,
+            )
+            self.assertGreater(float(result["selected_pivot"]), 0)
+            self.assertIn(result["pivot_source"], {"LEFT_HIGH", "DAILY_HANDLE"})
+
     def test_excessive_daily_handle_pullback_restores_left_high(self):
         frame = daily_handle_frame().iloc[:14].copy()
         frame.loc[frame.index[-1], ["High", "Low", "Close"]] = [94, 85, 87]
@@ -470,7 +615,7 @@ class PivotLifecycleTests(unittest.TestCase):
             params=DEFAULT_PARAMS,
         )
 
-        self.assertEqual(result["daily_handle_state"], "HANDLE_INVALIDATED")
+        self.assertEqual(result["daily_handle_state"], "LEFT_HIGH_ACTIVE")
         self.assertEqual(result["selected_pivot"], 100)
         self.assertEqual(result["pivot_source"], "LEFT_HIGH")
 

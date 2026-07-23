@@ -823,6 +823,7 @@ def normalize_tracking_dates(df):
         "daily_handle_candidate_date",
         "daily_handle_low_date",
         "daily_handle_confirmation_date",
+        "daily_handle_invalidation_date",
         "daily_base_low_date",
         "breakout_success_date",
         "structure_as_of_date",
@@ -1179,7 +1180,7 @@ def calculate_daily_handle_state(
     base_depth,
     params,
 ):
-    """Replay one evolving daily handle while keeping the left high authoritative."""
+    """Replay daily candles with exactly one confirmed, breakout-eligible pivot."""
     pivot_zone = calculate_pivot_zone(left_high, base_depth, params)
     daily, resolved_base_low_date = prepare_daily_handle_window(
         daily_window,
@@ -1246,121 +1247,205 @@ def calculate_daily_handle_state(
         }
 
     candidate = None
-    confirmed_handle = None
+    active_snapshot = left_snapshot.copy()
     handle_state = "LEFT_HIGH_ACTIVE"
     breakout_date = pd.NaT
     breakout_atr = np.nan
     selected_at_breakout = None
-    latest_candidate_metrics = state_fields.copy()
+    latest_candidate_metrics = {
+        **state_fields,
+        "daily_handle_invalidated": False,
+        "daily_handle_invalidation_date": pd.NaT,
+    }
+
+    def active_is_handle():
+        return active_snapshot.get("pivot_source") == "DAILY_HANDLE"
+
+    def resting_state():
+        return "HANDLE_READY" if active_is_handle() else "LEFT_HIGH_ACTIVE"
+
+    def pending_state():
+        return (
+            "HANDLE_REPLACEMENT_PENDING"
+            if active_is_handle()
+            else "HANDLE_CANDIDATE"
+        )
+
+    def pivot_trigger(snapshot):
+        pivot = float(snapshot["selected_pivot"])
+        buffer = calculate_level_buffer(
+            pivot,
+            snapshot.get("setup_atr", np.nan),
+            params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
+            params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
+        )
+        return pivot + float(buffer)
+
+    def new_candidate(current_pos, current_high, current):
+        recovery = (
+            (current_high - base_low) / (left_high - base_low)
+            if left_high > base_low
+            else np.nan
+        )
+        if pd.isna(recovery):
+            return None
+        if not (
+            pivot_zone["pivot_min_base_recovery"]
+            <= float(recovery)
+            <= pivot_zone["pivot_max_base_recovery"]
+        ):
+            return None
+        if active_is_handle() and current_high <= float(active_snapshot["selected_pivot"]):
+            return None
+        return {
+            "price": float(current_high),
+            "date": daily.index[current_pos],
+            "position": int(current_pos),
+            "atr": float(current.get("daily_atr_14", np.nan)),
+            "recovery": float(recovery),
+        }
+
+    def update_pending_metrics(candidate_value, state, **extra):
+        latest_candidate_metrics.update(
+            {
+                "daily_handle_state": state,
+                "daily_handle_candidate_pivot": float(candidate_value["price"]),
+                "daily_handle_candidate_date": candidate_value["date"],
+                "daily_handle_sessions_after_pivot": 0,
+                "daily_handle_valid": active_is_handle(),
+                # One confirmed pivot is always eligible, even while a
+                # replacement candidate is being evaluated.
+                "daily_handle_breakout_eligible": True,
+                **extra,
+            }
+        )
 
     for current_pos in range(1, len(daily)):
         current = daily.iloc[current_pos]
+        current_date = daily.index[current_pos]
         previous_close = float(daily["Close"].iloc[current_pos - 1])
         current_close = float(current["Close"])
         current_high = float(current["High"])
 
-        if handle_state == "HANDLE_READY" and confirmed_handle is not None:
-            active_snapshot = confirmed_handle
-            breakout_eligible = True
-        elif handle_state == "HANDLE_REFORMING" and confirmed_handle is not None:
-            active_snapshot = confirmed_handle
-            breakout_eligible = False
-        else:
-            active_snapshot = left_snapshot
-            breakout_eligible = True
-
-        active_pivot = float(active_snapshot["selected_pivot"])
-        active_buffer = calculate_level_buffer(
-            active_pivot,
-            active_snapshot.get("setup_atr", np.nan),
-            params.get("BREAKOUT_PRICE_BUFFER_PCT", 0.005),
-            params.get("BREAKOUT_ATR_BUFFER_MULTIPLIER", 0.20),
-        )
-        if breakout_eligible and crossed_confirmation_level(
+        # The first operation for every completed candle is always the same:
+        # test the one active, confirmed pivot. Candidate state cannot disable
+        # or redirect this check.
+        if crossed_confirmation_level(
             previous_close,
             current_close,
-            active_pivot + float(active_buffer),
+            pivot_trigger(active_snapshot),
         ):
-            breakout_date = daily.index[current_pos]
+            breakout_date = current_date
             breakout_atr = float(current.get("daily_atr_14", np.nan))
             selected_at_breakout = active_snapshot.copy()
             handle_state = "BREAKOUT_CONFIRMED"
             latest_candidate_metrics.update(
                 {
                     "daily_handle_state": handle_state,
+                    "daily_handle_valid": active_is_handle(),
                     "daily_handle_breakout_eligible": False,
                 }
             )
             break
 
-        if candidate is None:
-            recovery = (
-                (current_high - base_low) / (left_high - base_low)
-                if left_high > base_low
-                else np.nan
+        # A confirmed handle is invalidated only by its own post-handle
+        # pullback. Failure of a replacement candidate never deletes it.
+        if active_is_handle():
+            active_date = pd.to_datetime(
+                active_snapshot.get("selected_pivot_date"), errors="coerce"
             )
-            if (
-                pd.notna(recovery)
-                and pivot_zone["pivot_min_base_recovery"]
-                <= float(recovery)
-                <= pivot_zone["pivot_max_base_recovery"]
-            ):
-                candidate = {
-                    "price": current_high,
-                    "date": daily.index[current_pos],
-                    "position": current_pos,
-                    "atr": float(current.get("daily_atr_14", np.nan)),
-                    "recovery": float(recovery),
-                }
-                handle_state = "HANDLE_CANDIDATE"
+            after_active = daily.loc[
+                (daily.index > active_date) & (daily.index <= current_date)
+            ]
+            if not after_active.empty:
+                active_low_date = after_active["Low"].idxmin()
+                active_low = float(after_active.loc[active_low_date, "Low"])
+                active_pullback = (
+                    float(active_snapshot["selected_pivot"]) - active_low
+                ) / float(active_snapshot["selected_pivot"])
+                active_snapshot.update(
+                    {
+                        "handle_low": active_low,
+                        "handle_low_date": active_low_date,
+                        "handle_pullback_pct": float(active_pullback),
+                    }
+                )
+                if active_pullback > maximum_pullback:
+                    latest_candidate_metrics.update(
+                        {
+                            "daily_handle_invalidated": True,
+                            "daily_handle_invalidation_date": current_date,
+                            "daily_handle_valid": False,
+                        }
+                    )
+                    active_snapshot = left_snapshot.copy()
+                    candidate = None
+                    handle_state = "LEFT_HIGH_ACTIVE"
+
+                    # The fallback pivot becomes effective on this completed
+                    # candle, so do not lose an exact left-high crossing.
+                    if crossed_confirmation_level(
+                        previous_close,
+                        current_close,
+                        pivot_trigger(active_snapshot),
+                    ):
+                        breakout_date = current_date
+                        breakout_atr = float(current.get("daily_atr_14", np.nan))
+                        selected_at_breakout = active_snapshot.copy()
+                        handle_state = "BREAKOUT_CONFIRMED"
+                        latest_candidate_metrics.update(
+                            {
+                                "daily_handle_state": handle_state,
+                                "daily_handle_breakout_eligible": False,
+                            }
+                        )
+                        break
+
+        if candidate is None:
+            candidate = new_candidate(current_pos, current_high, current)
+            if candidate is not None:
+                handle_state = pending_state()
+                update_pending_metrics(
+                    candidate,
+                    handle_state,
+                    daily_handle_low=np.nan,
+                    daily_handle_low_date=pd.NaT,
+                    daily_handle_pullback_pct=np.nan,
+                )
+            else:
+                handle_state = resting_state()
                 latest_candidate_metrics.update(
                     {
                         "daily_handle_state": handle_state,
-                        "daily_handle_candidate_pivot": float(candidate["price"]),
-                        "daily_handle_candidate_date": candidate["date"],
-                        "daily_handle_sessions_after_pivot": 0,
-                        "daily_handle_valid": False,
-                        "daily_handle_breakout_eligible": False,
+                        "daily_handle_valid": active_is_handle(),
+                        "daily_handle_breakout_eligible": True,
                     }
                 )
             continue
 
         if current_high > float(candidate["price"]):
-            recovery = (
-                (current_high - base_low) / (left_high - base_low)
-                if left_high > base_low
-                else np.nan
-            )
-            if float(recovery) > pivot_zone["pivot_max_base_recovery"]:
+            replacement = new_candidate(current_pos, current_high, current)
+            if replacement is None:
+                # The pending structure failed, but the current confirmed
+                # pivot remains untouched and eligible.
                 candidate = None
-                confirmed_handle = None
-                handle_state = "HANDLE_INVALIDATED"
-                latest_candidate_metrics["daily_handle_state"] = handle_state
+                handle_state = resting_state()
+                latest_candidate_metrics.update(
+                    {
+                        "daily_handle_state": handle_state,
+                        "daily_handle_valid": active_is_handle(),
+                        "daily_handle_breakout_eligible": True,
+                    }
+                )
                 continue
-            candidate = {
-                "price": current_high,
-                "date": daily.index[current_pos],
-                "position": current_pos,
-                "atr": float(current.get("daily_atr_14", np.nan)),
-                "recovery": float(recovery),
-            }
-            handle_state = (
-                "HANDLE_REFORMING"
-                if confirmed_handle is not None
-                else "HANDLE_CANDIDATE"
-            )
-            latest_candidate_metrics.update(
-                {
-                    "daily_handle_state": handle_state,
-                    "daily_handle_candidate_pivot": float(candidate["price"]),
-                    "daily_handle_candidate_date": candidate["date"],
-                    "daily_handle_low": np.nan,
-                    "daily_handle_low_date": pd.NaT,
-                    "daily_handle_pullback_pct": np.nan,
-                    "daily_handle_sessions_after_pivot": 0,
-                    "daily_handle_valid": False,
-                    "daily_handle_breakout_eligible": False,
-                }
+            candidate = replacement
+            handle_state = pending_state()
+            update_pending_metrics(
+                candidate,
+                handle_state,
+                daily_handle_low=np.nan,
+                daily_handle_low_date=pd.NaT,
+                daily_handle_pullback_pct=np.nan,
             )
             continue
 
@@ -1371,29 +1456,31 @@ def calculate_daily_handle_state(
         pullback_pct = (float(candidate["price"]) - handle_low) / float(
             candidate["price"]
         )
-        latest_candidate_metrics = {
-            **latest_candidate_metrics,
-            "daily_handle_state": handle_state,
-            "daily_handle_candidate_pivot": float(candidate["price"]),
-            "daily_handle_candidate_date": candidate["date"],
-            "daily_handle_low": handle_low,
-            "daily_handle_low_date": handle_low_date,
-            "daily_handle_pullback_pct": float(pullback_pct),
-            "daily_handle_sessions_after_pivot": int(sessions_after_pivot),
-            "daily_handle_valid": False,
-            "daily_handle_breakout_eligible": False,
-        }
+        handle_state = pending_state()
+        update_pending_metrics(
+            candidate,
+            handle_state,
+            daily_handle_low=handle_low,
+            daily_handle_low_date=handle_low_date,
+            daily_handle_pullback_pct=float(pullback_pct),
+            daily_handle_sessions_after_pivot=int(sessions_after_pivot),
+        )
 
         if pullback_pct > maximum_pullback:
             candidate = None
-            confirmed_handle = None
-            handle_state = "HANDLE_INVALIDATED"
-            latest_candidate_metrics["daily_handle_state"] = handle_state
+            handle_state = resting_state()
+            latest_candidate_metrics.update(
+                {
+                    "daily_handle_state": handle_state,
+                    "daily_handle_valid": active_is_handle(),
+                    "daily_handle_breakout_eligible": True,
+                }
+            )
             continue
 
         if sessions_after_pivot >= confirmation_sessions:
-            confirmation_date = daily.index[current_pos]
-            confirmed_handle = {
+            confirmation_date = current_date
+            active_snapshot = {
                 **left_snapshot,
                 "handle_high_pivot": float(candidate["price"]),
                 "handle_high_date": candidate["date"],
@@ -1409,6 +1496,7 @@ def calculate_daily_handle_state(
                 "setup_atr": float(candidate["atr"]),
                 "handle_pivot_base_recovery": float(candidate["recovery"]),
             }
+            candidate = None
             handle_state = "HANDLE_READY"
             latest_candidate_metrics.update(
                 {
@@ -1416,13 +1504,14 @@ def calculate_daily_handle_state(
                     "daily_handle_confirmation_date": confirmation_date,
                     "daily_handle_valid": True,
                     "daily_handle_breakout_eligible": True,
+                    "daily_handle_invalidated": False,
                 }
             )
 
-    selected = selected_at_breakout or confirmed_handle or left_snapshot
+    selected = selected_at_breakout or active_snapshot
     latest_candidate_metrics["daily_handle_state"] = handle_state
-    if confirmed_handle is not None and handle_state == "HANDLE_READY":
-        latest_candidate_metrics["daily_handle_valid"] = True
+    if selected_at_breakout is None:
+        latest_candidate_metrics["daily_handle_valid"] = active_is_handle()
         latest_candidate_metrics["daily_handle_breakout_eligible"] = True
     return {
         **selected,
@@ -1530,7 +1619,8 @@ def calculate_pivot_lifecycle(
 
     daily_handle_state = daily_handle_fields.get("daily_handle_state")
     handle_invalidated = bool(
-        daily_handle_state == "HANDLE_INVALIDATED"
+        daily_handle_fields.get("daily_handle_invalidated", False)
+        or daily_handle_state == "HANDLE_INVALIDATED"
         or (
             pd.isna(breakout_date)
             and selected.get("pivot_source") == "HANDLE"
@@ -1665,8 +1755,6 @@ def calculate_pivot_lifecycle(
         lifecycle_status = "BREAKOUT_BUY_RANGE"
     elif pd.isna(breakout_date):
         if handle_invalidated:
-            lifecycle_status = "RESETTING"
-        elif daily_handle_state == "HANDLE_REFORMING":
             lifecycle_status = "RESETTING"
         elif selected.get("pivot_source") in {"HANDLE", "DAILY_HANDLE"}:
             lifecycle_status = "HANDLE_READY"

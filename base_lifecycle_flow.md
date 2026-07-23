@@ -197,8 +197,13 @@ maximum handle   = base_low + (1.10 * base_depth_price)
 ```
 
 The candidate handle can pull back no more than one third of base depth. Any
-higher daily high restarts its five-session confirmation. A daily close crossing
-the selected pivot plus the daily ATR/price buffer confirms breakout. Post-breakout management uses a fixed range
+higher daily high before confirmation restarts its five-session count. After a
+handle is confirmed, a higher high starts a pending replacement, but the
+existing confirmed handle remains the active breakout pivot until that
+replacement becomes valid. Candidate processing never disables breakout
+detection. A daily close crossing the active pivot plus the daily ATR/price
+buffer confirms breakout.
+Post-breakout management uses a fixed range
 from 10% below to 10% above the selected pivot. Success must also clear the old
 left-high supply when the handle pivot is lower.
 
