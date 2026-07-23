@@ -57,6 +57,25 @@ class TradingViewLifecycleChartTests(unittest.TestCase):
         self.assertEqual(weekly.iloc[0]["Open"], self.daily.iloc[0]["Open"])
         self.assertIn("Close", weekly.columns)
 
+    def test_chart_keeps_multiple_years_of_pre_base_context(self):
+        dates = pd.bdate_range("2021-01-01", "2026-01-01")
+        history = pd.DataFrame(
+            {
+                "Open": 100.0,
+                "High": 102.0,
+                "Low": 98.0,
+                "Close": 101.0,
+            },
+            index=dates,
+        )
+
+        displayed = prepare_lifecycle_chart_data(
+            history, "Daily", context_start="2025-01-01"
+        )
+
+        self.assertLessEqual(len(displayed), 1_500)
+        self.assertLessEqual(displayed.index.min(), pd.Timestamp("2021-01-04"))
+
     def test_lines_distinguish_active_candidate_and_range(self):
         lines = build_lifecycle_price_lines(self.result)
         titles = {line["title"] for line in lines}
