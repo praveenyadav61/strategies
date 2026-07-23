@@ -20,6 +20,13 @@ LIGHTWEIGHT_CHARTS_URL = (
     "dist/lightweight-charts.standalone.production.js"
 )
 
+# Keep enough history to review the trend leading into a base.  The previous
+# 35-day pre-base window made otherwise available candles disappear from the
+# chart (for example, a September 2024 left high started the chart in August).
+PRE_BASE_CONTEXT_DAYS = 5 * 365
+MAX_DAILY_CANDLES = 1_500
+MAX_WEEKLY_CANDLES = 520
+
 
 def _number(value: Any) -> float | None:
     """Return a finite float for a saved lifecycle value, otherwise None."""
@@ -69,17 +76,19 @@ def prepare_lifecycle_chart_data(
     frame = frame.dropna(subset=required)
     start = _date(context_start)
     if start is not None:
-        # A little pre-base context makes the left high easier to interpret.
-        frame = frame.loc[frame.index >= start - pd.Timedelta(days=35)]
+        # Preserve the longer-term trend before the lifecycle's left high.
+        frame = frame.loc[
+            frame.index >= start - pd.Timedelta(days=PRE_BASE_CONTEXT_DAYS)
+        ]
 
     if str(timeframe).lower().startswith("week"):
         aggregations = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
         if "Volume" in frame.columns:
             aggregations["Volume"] = "sum"
         frame = frame.resample("W-FRI").agg(aggregations).dropna(subset=required)
-        frame = frame.tail(160)
+        frame = frame.tail(MAX_WEEKLY_CANDLES)
     else:
-        frame = frame.tail(650)
+        frame = frame.tail(MAX_DAILY_CANDLES)
 
     if frame.empty:
         raise ValueError("No valid OHLC candles remain for the selected timeframe.")
