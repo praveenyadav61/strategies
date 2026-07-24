@@ -13,6 +13,11 @@ if PROJECT_ROOT not in sys.path:
 
 from data_layer.data_engine import DataEngine
 from base_structure_identity import bases_are_equivalent, consolidate_equivalent_bases
+from lifecycle_state_machine import (
+    advance_daily_handle_state,
+    daily_handle_result,
+    initialize_daily_handle_state,
+)
 from modular_base_scanner import ScanStats, calculate_cup_metrics
 
 
@@ -836,6 +841,30 @@ def normalize_tracking_dates(df):
     return normalized
 
 
+def remove_replaced_history_rows(history_df, tracked_df):
+    """Remove rows whose normalized base/date key is present in tracked_df."""
+    if (
+        history_df is None
+        or history_df.empty
+        or tracked_df is None
+        or tracked_df.empty
+        or not {"base_id", "tracking_date"}.issubset(history_df.columns)
+        or not {"base_id", "tracking_date"}.issubset(tracked_df.columns)
+    ):
+        return history_df
+    history_ids = history_df["base_id"].astype(str)
+    history_dates = pd.to_datetime(
+        history_df["tracking_date"], errors="coerce"
+    ).dt.normalize()
+    current_ids = tracked_df["base_id"].astype(str)
+    current_dates = pd.to_datetime(
+        tracked_df["tracking_date"], errors="coerce"
+    ).dt.normalize()
+    current_keys = pd.MultiIndex.from_arrays([current_ids, current_dates])
+    history_keys = pd.MultiIndex.from_arrays([history_ids, history_dates])
+    return history_df[~history_keys.isin(current_keys)]
+
+
 def consolidate_tracking_structures(df, params=None):
     """Remove duplicate active/archive rows produced by overlapping windows."""
     if df is None or df.empty or "Symbol" not in df.columns:
@@ -1171,7 +1200,7 @@ def prepare_daily_handle_window(daily_window, base_low_date, atr_window=14):
     return daily[daily.index >= resolved_low_date].copy(), resolved_low_date
 
 
-def calculate_daily_handle_state(
+def _calculate_daily_handle_state_legacy(
     daily_window,
     left_high,
     left_high_date,
@@ -1520,6 +1549,63 @@ def calculate_daily_handle_state(
         "daily_breakout_atr": breakout_atr,
         "daily_event_window": daily,
     }
+
+
+def calculate_daily_handle_state(
+    daily_window,
+    left_high,
+    left_high_date,
+    base_low,
+    base_low_date,
+    base_depth,
+    params,
+):
+    """Reconstruct daily state by folding the shared one-candle transition."""
+    daily, resolved_base_low_date = prepare_daily_handle_window(
+        daily_window,
+        base_low_date,
+        atr_window=params.get("ATR_WINDOW", 14),
+    )
+    left_atr_rows = daily[
+        daily.index <= pd.to_datetime(left_high_date, errors="coerce")
+    ]
+    left_setup_atr = (
+        float(left_atr_rows["daily_atr_14"].iloc[-1])
+        if not left_atr_rows.empty
+        else (
+            float(daily["daily_atr_14"].iloc[0])
+            if not daily.empty
+            else np.nan
+        )
+    )
+    first_candle = None
+    if not daily.empty:
+        first_candle = {
+            **daily.iloc[0].to_dict(),
+            "date": daily.index[0],
+        }
+    state = initialize_daily_handle_state(
+        left_high=left_high,
+        left_high_date=left_high_date,
+        base_low=base_low,
+        base_depth=base_depth,
+        resolved_base_low_date=resolved_base_low_date,
+        left_setup_atr=left_setup_atr,
+        first_candle=first_candle,
+        params=params,
+    )
+    for candle_date, candle_row in daily.iloc[1:].iterrows():
+        candle = {**candle_row.to_dict(), "date": candle_date}
+        state, _events = advance_daily_handle_state(state, candle, params)
+        if pd.notna(state.get("breakout_date")):
+            break
+    result = daily_handle_result(state, daily_event_window=daily)
+    # Preserve the historical short-window schema exactly.  The internal state
+    # still carries these fields so incremental processing can continue safely.
+    if len(daily) < 2:
+        result.pop("daily_handle_invalidated", None)
+        result.pop("daily_handle_invalidation_date", None)
+    return result
 
 
 def calculate_pivot_lifecycle(
@@ -1980,13 +2066,10 @@ def update_tracking_store(results_df, as_of_date, data_path=DATA_PATH, tracking_
     tracked_df["tracking_date"] = pd.to_datetime(as_of_date)
 
     if not history_df.empty and {"base_id", "tracking_date"}.issubset(history_df.columns):
-        current_keys = set(zip(tracked_df["base_id"].astype(str), tracked_df["tracking_date"].astype(str)))
-        history_df = history_df[
-            ~history_df.apply(
-                lambda row: (str(row.get("base_id")), str(row.get("tracking_date"))) in current_keys,
-                axis=1,
-            )
-        ]
+        # Normalize both sides before key comparison.  String conversion can
+        # represent the same date as either ``2026-07-22`` or
+        # ``2026-07-22 00:00:00`` and previously allowed same-date duplicates.
+        history_df = remove_replaced_history_rows(history_df, tracked_df)
     history_df = pd.concat([history_df, tracked_df], ignore_index=True, sort=False)
 
     newly_archived = tracked_df[tracked_df["tracking_state"] == "ARCHIVED"].copy()
@@ -2231,6 +2314,8 @@ def run_tracking_replay(
     end_date,
     frequency="weekly_friday",
     data_path=DATA_PATH,
+    scan_dir=SCAN_HISTORY_DIR,
+    tracking_dir=TRACKING_DIR,
     debug=False,
     update_tracking=True,
     progress_callback=None,
@@ -2247,6 +2332,7 @@ def run_tracking_replay(
             results_df,
             scanner.all_window_results,
             scanner.stage_results,
+            scan_dir=scan_dir,
             scan_date_label=replay_date.strftime("%Y-%m-%d"),
         )
         tracking_info = (
@@ -2254,6 +2340,7 @@ def run_tracking_replay(
                 results_df,
                 replay_date,
                 data_path=data_path,
+                tracking_dir=tracking_dir,
                 params=params,
             )
             if update_tracking
