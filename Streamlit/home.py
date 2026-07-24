@@ -17,9 +17,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from modular_base_scanner import CupScanner
 from base_lifecycle_pages import (
-    render_base_phase_page,
     render_lifecycle_journey_page,
-    render_tracking_phase_page,
 )
 from chart_plot import plot_cup_formation, plot_custom_ohlcv_chart, plot_trend_follower_chart
 from trend_follower.final_trend_follower import EMAScanner
@@ -414,8 +412,6 @@ page = st.sidebar.radio(
         "Home",
         "Base Formation",
         "Lifecycle Journey",
-        "Base Phase",
-        "Tracking Phase",
         "Announcements",
         "Earnings Summary",
         "Earnings Tracker",
@@ -619,12 +615,6 @@ elif page == "Base Formation":
 
 elif page == "Lifecycle Journey":
     render_lifecycle_journey_page(static_df, m_cap)
-
-elif page == "Tracking Phase":
-    render_tracking_phase_page(static_df, m_cap)
-
-elif page == "Base Phase":
-    render_base_phase_page(static_df, m_cap)
 
 elif page == "Announcements":
     st.title("Announcements")

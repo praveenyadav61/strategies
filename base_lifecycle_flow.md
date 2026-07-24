@@ -1,7 +1,7 @@
 # Base Lifecycle Scanner — Iteration 3 (All Windows)
 
 This is the working specification for `Streamlit/base_lifecycle_scanner.py` and
-the Base Phase / Tracking Phase dashboard. Pivot construction, breakout
+the consolidated Lifecycle Journey dashboard. Pivot construction, breakout
 confirmation, success, retest, and failure details live in
 `base_lifecycle_pivot_breakout.md`.
 
@@ -64,8 +64,8 @@ different nested bases. Recovery percentage does not decide whether a window is
 structurally valid. A valid unique structure below 40% remains `NOT_TRACKED`
 until its own recovery reaches the tracking threshold.
 
-Lifecycle Journey, Base Phase, Tracking Phase, and Review Funnel provide a base
-window filter. All available windows are selected by default.
+Lifecycle Journey provides a base-window filter. All available windows are
+selected by default.
 
 ## 4. Structural base rules
 
@@ -255,10 +255,11 @@ Recovery Building
 Successful Breakout
 ```
 
-`FAILED` and `NOT_TRACKED` are not shown on this page. Base Phase and Tracking
-Phase remain available as diagnostic pages during validation.
+Failed setups and consideration pullbacks are available in the collapsed
+Failure Review section. `NOT_TRACKED` is excluded from the three main journey
+tables.
 
-All lifecycle pages expose a multi-select base-window filter with 104W, 52W,
+Lifecycle Journey exposes a multi-select base-window filter with 104W, 52W,
 and 26W selected by default. The same symbol can appear more than once when it
 has valid bases in several windows.
 

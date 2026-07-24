@@ -580,13 +580,13 @@ The simplified page displays three current tables:
 2. RECOVERY_BUILDING
 3. SUCCESSFUL_BREAKOUT
 
-FAILED is excluded from this page.
+FAILED is excluded from the three primary tables and appears in the collapsed
+Failure Review section.
 
 NOT_TRACKED is excluded from this page.
 
-Base Phase and Tracking Phase remain available for detailed diagnosis.
-
-Lifecycle Journey, Base Phase, Tracking Phase and Review Funnel include a base-window filter.
+Base Phase and Tracking Phase have been removed. Lifecycle Journey is the
+single lifecycle review page and includes the base-window filter.
 
 
 30. NON-HARD INFORMATIONAL FIELDS

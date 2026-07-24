@@ -146,7 +146,7 @@ event_count: 2,651
 .\quant\Scripts\python.exe -m streamlit run Streamlit\home.py
 ```
 
-On Lifecycle Journey, Base Phase, or Tracking Phase, choose:
+On Lifecycle Journey, choose:
 
 ```text
 Incremental Shadow · frozen-v5-2026-07-23 (validated)

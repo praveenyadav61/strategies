@@ -6,7 +6,6 @@ import streamlit as st
 
 from lifecycle_dashboard_fields import (
     TODAY_STATUS_ORDER,
-    build_lifecycle_activity_events,
     derive_lifecycle_today_status,
     latest_tracking_date,
 )
@@ -22,17 +21,8 @@ LIFECYCLE_BASELINE_DIR = (
 LIFECYCLE_PRODUCTION_DIR = (
     ROOT_DIR / "data" / "base_lifecycle_layers" / "production"
 )
-TRACKING_SOURCE_SESSION_KEY = "lifecycle_tracking_data_source"
-STAGE_KEYS = [
-    "daily_trend_passed",
-    "weekly_data_passed",
-    "depth_passed",
-    "recovery_passed",
-    "prior_uptrend_passed",
-    "pivot_evaluated",
-    "final_candidates",
-    "rejected",
-]
+
+
 def render_lifecycle_control_styles():
     """Keep lifecycle multiselect controls compact and theme-compatible."""
     st.markdown(
@@ -95,16 +85,6 @@ def render_lifecycle_control_styles():
         """,
         unsafe_allow_html=True,
     )
-
-
-def long_frame_to_stage_results(stage_df):
-    if stage_df is None or stage_df.empty or "stage" not in stage_df.columns:
-        return {stage: pd.DataFrame() for stage in STAGE_KEYS}
-
-    return {
-        stage: stage_df[stage_df["stage"] == stage].drop(columns=["stage"]).reset_index(drop=True)
-        for stage in STAGE_KEYS
-    }
 
 
 def tracking_state_from_history(history_df):
@@ -198,32 +178,14 @@ def available_lifecycle_tracking_sources():
     return sources
 
 
-def render_lifecycle_tracking_source_selector():
-    sources = available_lifecycle_tracking_sources()
-    labels = list(sources)
-    default_index = len(labels) - 1 if len(labels) > 1 else 0
-    selected = st.selectbox(
-        "Lifecycle data source",
-        options=labels,
-        index=default_index,
-        key=TRACKING_SOURCE_SESSION_KEY,
-        help=(
-            "Validated shadow results are isolated from production. Switching "
-            "this control changes only what the lifecycle pages display."
-        ),
-    )
-    source = sources[selected]
-    if source["kind"] == "shadow":
-        st.caption(f"Using {selected} · {source['caption']}")
-    else:
-        st.caption("Using existing production lifecycle tracking files.")
-    return source
+def preferred_lifecycle_tracking_source(sources=None):
+    """Use checkpoint production automatically, with a legacy-data fallback."""
+    sources = sources or available_lifecycle_tracking_sources()
+    return sources.get("Checkpoint Production", sources["Production tracking"])
 
 
 def load_tracking_state():
-    sources = available_lifecycle_tracking_sources()
-    selected_label = st.session_state.get(TRACKING_SOURCE_SESSION_KEY)
-    source = sources.get(selected_label, sources["Production tracking"])
+    source = preferred_lifecycle_tracking_source()
     if source["kind"] == "shadow":
         history = pd.read_parquet(source["history_path"])
         return tracking_state_from_history(history)
@@ -268,49 +230,6 @@ def load_daily_price_data(symbol):
             return daily_df.sort_index()
 
     raise FileNotFoundError(f"Could not find daily data for {symbol}")
-
-
-def get_lifecycle_snapshot_dates():
-    scan_dir = ROOT_DIR / "data" / "base_lifecycle_scans"
-    if not scan_dir.exists():
-        return []
-
-    dates = []
-    for path in scan_dir.glob("base_lifecycle_*.parquet"):
-        if path.name.startswith("base_lifecycle_windows_") or path.name.startswith("base_lifecycle_stages_"):
-            continue
-        dates.append(path.stem.replace("base_lifecycle_", ""))
-    return sorted(set(dates), reverse=True)
-
-
-def select_lifecycle_snapshot_date(key):
-    snapshot_dates = get_lifecycle_snapshot_dates()
-    if not snapshot_dates:
-        return None
-
-    return st.sidebar.selectbox(
-        "Lifecycle Snapshot Date",
-        options=snapshot_dates,
-        index=0,
-        key=key,
-    )
-
-
-def load_lifecycle_saved_state(snapshot_date=None):
-    scan_dir = ROOT_DIR / "data" / "base_lifecycle_scans"
-    if snapshot_date:
-        lifecycle_path = scan_dir / f"base_lifecycle_{snapshot_date}.parquet"
-        windows_path = scan_dir / f"base_lifecycle_windows_{snapshot_date}.parquet"
-        stage_path = scan_dir / f"base_lifecycle_stages_{snapshot_date}.parquet"
-    else:
-        lifecycle_path = scan_dir / "latest.parquet"
-        windows_path = scan_dir / "latest_windows.parquet"
-        stage_path = scan_dir / "latest_stage_results.parquet"
-
-    lifecycle_df = pd.read_parquet(lifecycle_path) if lifecycle_path.exists() else pd.DataFrame()
-    all_windows_df = pd.read_parquet(windows_path) if windows_path.exists() else pd.DataFrame()
-    stage_results = long_frame_to_stage_results(pd.read_parquet(stage_path)) if stage_path.exists() else {}
-    return lifecycle_df, all_windows_df, stage_results
 
 
 def ensure_journey_stage(df):
@@ -389,16 +308,6 @@ def filter_lifecycle_windows(df, selected_windows):
     if not selected_windows:
         return df.iloc[0:0].copy()
     return df[windows.isin(selected_windows)].copy()
-
-
-def filter_stage_results_windows(stage_results, selected_windows):
-    return {
-        stage: filter_lifecycle_windows(
-            frame if isinstance(frame, pd.DataFrame) else pd.DataFrame(frame),
-            selected_windows,
-        )
-        for stage, frame in (stage_results or {}).items()
-    }
 
 
 def collapse_equivalent_lifecycle_rows(df, date_column=None):
@@ -830,57 +739,123 @@ def render_lifecycle_table_with_chart(
 
 
 def load_current_journey_rows():
-    """Combine tracking and discovery, keeping one row per window-aware base."""
+    """Load the latest checkpoint-backed row for every current base."""
     tracking_state = load_tracking_state()
     active_df = ensure_journey_stage(tracking_state.get("active", pd.DataFrame()))
-    latest_df, _all_windows_df, _stage_results = load_lifecycle_saved_state()
-    latest_df = ensure_journey_stage(latest_df)
-
-    sources = []
-    if active_df is not None and not active_df.empty:
-        active_df = active_df.copy()
-        active_df["_journey_source_priority"] = 0
-        sources.append(active_df)
-    if latest_df is not None and not latest_df.empty:
-        latest_df = latest_df.copy()
-        latest_df["_journey_source_priority"] = 1
-        sources.append(latest_df)
-    if not sources:
+    if active_df is None or active_df.empty:
         return pd.DataFrame()
-
-    journey_df = pd.concat(sources, ignore_index=True, sort=False)
+    journey_df = active_df.copy()
     journey_df["Symbol"] = journey_df["Symbol"].astype(str).str.strip()
-    fallback_key = (
-        journey_df["Symbol"]
-        + "|"
-        + lifecycle_window_series(journey_df).fillna(-1).astype(int).astype(str)
-        + "W|"
-        + pd.to_datetime(
-            journey_df.get("left_high_index", pd.Series(pd.NaT, index=journey_df.index)),
-            errors="coerce",
-        ).dt.strftime("%Y%m%d").fillna("na")
-        + "|"
-        + pd.to_datetime(
-            journey_df.get("base_low_index", pd.Series(pd.NaT, index=journey_df.index)),
-            errors="coerce",
-        ).dt.strftime("%Y%m%d").fillna("na")
-    )
-    existing_base_id = journey_df.get(
-        "base_id", pd.Series(pd.NA, index=journey_df.index, dtype="object")
-    )
-    journey_df["_journey_base_key"] = existing_base_id.fillna(fallback_key)
-    journey_df = (
-        journey_df.sort_values("_journey_source_priority", kind="stable")
-        .drop_duplicates(subset=["_journey_base_key"], keep="first")
-        .drop(columns=["_journey_source_priority", "_journey_base_key"])
-        .reset_index(drop=True)
-    )
     history_df = ensure_journey_stage(tracking_state.get("history", pd.DataFrame()))
     return derive_lifecycle_today_status(
-        journey_df,
+        journey_df.reset_index(drop=True),
         history_df,
         reference_date=latest_tracking_date(history_df),
     )
+
+
+def build_failure_review_rows(tracking_state):
+    """Build compact failed/pullback groups without a separate tracking page."""
+    history = ensure_journey_stage(
+        tracking_state.get("history", pd.DataFrame())
+    )
+    archived = ensure_journey_stage(
+        tracking_state.get("archived", pd.DataFrame())
+    )
+    active = ensure_journey_stage(
+        tracking_state.get("active", pd.DataFrame())
+    )
+    groups = []
+    if archived is not None and not archived.empty:
+        failed = archived.copy()
+        def failure_category(row):
+            success_flag = row.get("breakout_success", False)
+            succeeded = (
+                pd.notna(row.get("breakout_success_date"))
+                or (pd.notna(success_flag) and bool(success_flag))
+            )
+            return (
+                "FAILED_AFTER_SUCCESS"
+                if succeeded
+                else "FAILED_AFTER_BREAKOUT"
+            )
+
+        failed["failure_category"] = failed.apply(failure_category, axis=1)
+        groups.append(failed)
+
+    if (
+        history is not None
+        and not history.empty
+        and active is not None
+        and not active.empty
+        and {"base_id", "journey_stage"}.issubset(history.columns)
+    ):
+        ever_considered = set(
+            history.loc[
+                history["journey_stage"].eq("BREAKOUT_CONSIDERATION"),
+                "base_id",
+            ].astype(str)
+        )
+        pullbacks = active[
+            active["base_id"].astype(str).isin(ever_considered)
+            & active["journey_stage"].isin(
+                ["RECOVERY_BUILDING", "NOT_TRACKED"]
+            )
+        ].copy()
+        if not pullbacks.empty:
+            pullbacks["failure_category"] = "CONSIDERATION_PULLBACK"
+            groups.append(pullbacks)
+    return (
+        pd.concat(groups, ignore_index=True, sort=False)
+        if groups
+        else pd.DataFrame()
+    )
+
+
+def render_failure_review(static_df, m_cap):
+    failure_df = build_failure_review_rows(load_tracking_state())
+    with st.expander(
+        f"Failure Review ({len(failure_df)})",
+        expanded=False,
+    ):
+        if failure_df.empty:
+            st.info("No failed or consideration-pullback bases.")
+            return
+        labels = [
+            ("Failed Before Success", "FAILED_AFTER_BREAKOUT"),
+            ("Failed After Success", "FAILED_AFTER_SUCCESS"),
+            ("Consideration Pullbacks", "CONSIDERATION_PULLBACK"),
+        ]
+        counts = failure_df["failure_category"].value_counts()
+        metric_columns = st.columns(3)
+        for metric, (label, category) in zip(metric_columns, labels):
+            metric.metric(label, int(counts.get(category, 0)))
+        selected_label = st.selectbox(
+            "Failure group",
+            options=[label for label, _ in labels],
+            key="journey_failure_group",
+        )
+        category = dict(labels)[selected_label]
+        selected = failure_df[
+            failure_df["failure_category"].eq(category)
+        ].copy()
+        selected = add_lifecycle_display_columns(selected, static_df, m_cap)
+        render_lifecycle_table_with_chart(
+            selected,
+            f"journey_failure_{category.lower()}",
+            source_df=failure_df,
+            default_columns=[
+                "Symbol",
+                "failure_category",
+                "base_window_weeks",
+                "selected_pivot",
+                "breakout_date",
+                "breakout_success_date",
+                "hard_failure",
+                "persistent_failure",
+                "tracking_date",
+            ],
+        )
 
 
 def render_lifecycle_journey_page(static_df, m_cap):
@@ -890,8 +865,6 @@ def render_lifecycle_journey_page(static_df, m_cap):
     st.caption(
         "Current stock journey in three review groups. Select a row to open its chart."
     )
-    render_lifecycle_tracking_source_selector()
-
     journey_df = load_current_journey_rows()
     if journey_df.empty:
         st.warning("No lifecycle journey data found. Run the replay script first.")
@@ -972,286 +945,4 @@ def render_lifecycle_journey_page(static_df, m_cap):
             default_columns=default_columns,
         )
 
-
-def stage_labels():
-    return [
-        ("Final Candidates", "final_candidates"),
-        ("Daily Trend", "daily_trend_passed"),
-        ("Weekly Data", "weekly_data_passed"),
-        ("Depth", "depth_passed"),
-        ("Recovery", "recovery_passed"),
-        ("Prior Uptrend", "prior_uptrend_passed"),
-        ("Pivot Evaluated", "pivot_evaluated"),
-        ("Rejected", "rejected"),
-    ]
-
-
-def render_review_funnel(stage_results, lifecycle_df):
-    labels = stage_labels()
-    stage_frames = {
-        stage: frame if isinstance(frame, pd.DataFrame) else pd.DataFrame(frame)
-        for _, stage in labels
-        for frame in [stage_results.get(stage, pd.DataFrame())]
-    }
-    with st.expander("Review Funnel", expanded=True):
-        stage_summary_df = pd.DataFrame(
-            [
-                {
-                    "Stage": label,
-                    "Count": len(stage_frames[stage]),
-                    "Unique Stocks": (
-                        stage_frames[stage]["Symbol"].nunique()
-                        if "Symbol" in stage_frames[stage].columns
-                        else 0
-                    ),
-                    "Unique Windows": (
-                        stage_frames[stage]["scan_window_weeks"].nunique()
-                        if "scan_window_weeks" in stage_frames[stage].columns
-                        else 0
-                    ),
-                }
-                for label, stage in labels
-            ]
-        )
-        st.dataframe(stage_summary_df, use_container_width=True, hide_index=True)
-
-        selected_stage_label = st.selectbox(
-            "Review Stage",
-            options=[label for label, _ in labels],
-            index=0,
-            key="lifecycle_review_stage",
-        )
-        selected_stage = dict(labels)[selected_stage_label]
-        stage_df = stage_frames.get(selected_stage, pd.DataFrame()).copy()
-        if stage_df.empty:
-            st.info(f"No rows available for {selected_stage_label}.")
-            return
-
-        stage_df = sort_lifecycle_for_review(
-            stage_df,
-            view_key=f"review_{selected_stage}",
-        )
-        stage_default_cols = [
-            "Symbol",
-            "failure_reason",
-            "journey_stage",
-            "recovery_pct",
-            "base_window_weeks",
-            "pivot_source",
-            "selected_pivot",
-            "distance_from_pivot_pct",
-        ]
-        stage_cols = selectable_table_columns(
-            stage_df,
-            key=f"lifecycle_review_{selected_stage}_columns",
-            default_columns=stage_default_cols,
-            label="Visible review columns",
-        )
-        stage_display_df = stage_df[stage_cols]
-        stage_event = st.dataframe(
-            stage_display_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config=compact_table_column_config(stage_cols),
-            on_select="rerun",
-            selection_mode="single-row",
-            key="lifecycle_review_funnel_table",
-        )
-
-        if stage_event.selection.rows:
-            # Use the complete source row for charts even when most table columns are hidden.
-            selected_stage_row = stage_df.iloc[stage_event.selection.rows[0]]
-            selected_stage_symbol = selected_stage_row["Symbol"]
-            st.subheader(f"Review Chart for {selected_stage_symbol}")
-            try:
-                result_row = selected_stage_row.to_dict()
-                if "pivot_index" not in result_row and selected_stage_symbol in set(lifecycle_df.get("Symbol", [])):
-                    matching_rows = lifecycle_df[
-                        lifecycle_df["Symbol"] == selected_stage_symbol
-                    ]
-                    selected_window = selected_stage_row.get(
-                        "base_window_weeks",
-                        selected_stage_row.get("scan_window_weeks"),
-                    )
-                    if pd.notna(selected_window):
-                        matching_rows = matching_rows[
-                            lifecycle_window_series(matching_rows).eq(
-                                int(selected_window)
-                            )
-                        ]
-                    if not matching_rows.empty:
-                        result_row = matching_rows.iloc[0].to_dict()
-                render_selected_lifecycle_chart(
-                    selected_stage_symbol,
-                    result_row=result_row,
-                    key_prefix=f"review_{selected_stage}",
-                )
-            except FileNotFoundError:
-                st.error(f"Could not find data file for {selected_stage_symbol}.")
-            except Exception as e:
-                st.error(f"An error occurred while plotting {selected_stage_symbol}: {e}")
-
-
-def render_base_phase_page(static_df, m_cap):
-    render_lifecycle_control_styles()
-    st.title("Base Phase")
-    st.info("Review saved base snapshots. Run scans from the command line while the engine logic is evolving.")
-    render_lifecycle_tracking_source_selector()
-
-    selected_snapshot_date = select_lifecycle_snapshot_date("base_lifecycle_snapshot_date")
-    lifecycle_df, _all_windows_df, stage_results = load_lifecycle_saved_state(selected_snapshot_date)
-    lifecycle_df = ensure_journey_stage(lifecycle_df)
-    tracking_history_df = ensure_journey_stage(
-        load_tracking_state().get("history", pd.DataFrame())
-    )
-    lifecycle_df = derive_lifecycle_today_status(
-        lifecycle_df,
-        tracking_history_df,
-        reference_date=selected_snapshot_date,
-    )
-    if selected_snapshot_date:
-        st.caption(f"Showing Base Phase saved snapshot {selected_snapshot_date}.")
-
-    if lifecycle_df.empty:
-        st.warning("No lifecycle scan results found. Run the replay script first.")
-        if stage_results:
-            render_review_funnel(stage_results, lifecycle_df)
-        return
-
-    selected_windows = render_lifecycle_window_filter(
-        [lifecycle_df, *stage_results.values()], "base_phase_windows"
-    )
-    lifecycle_df = filter_lifecycle_windows(lifecycle_df, selected_windows)
-    lifecycle_df = collapse_equivalent_lifecycle_rows(lifecycle_df)
-    lifecycle_df = render_today_status_filter(lifecycle_df, "base_phase_today_status")
-    stage_results = filter_stage_results_windows(stage_results, selected_windows)
-    if lifecycle_df.empty:
-        st.info("No lifecycle candidates are available for the selected base windows.")
-        render_review_funnel(stage_results, lifecycle_df)
-        return
-
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("Candidates", len(lifecycle_df))
-    journey_counts = lifecycle_df.get(
-        "journey_stage", pd.Series(index=lifecycle_df.index, dtype="object")
-    ).value_counts()
-    metric_cols[1].metric("Recovery Building", int(journey_counts.get("RECOVERY_BUILDING", 0)))
-    metric_cols[2].metric("Consideration", int(journey_counts.get("BREAKOUT_CONSIDERATION", 0)))
-    metric_cols[3].metric("Successful", int(journey_counts.get("SUCCESSFUL_BREAKOUT", 0)))
-
-    render_review_funnel(stage_results, lifecycle_df)
-
-    available_stages = sorted(lifecycle_df["journey_stage"].dropna().unique())
-    selected_stages = st.multiselect(
-        "Journey Stage",
-        options=available_stages,
-        default=available_stages,
-        key="base_phase_journey_stages",
-    )
-
-    display_df = lifecycle_df.copy()
-    if selected_stages:
-        display_df = display_df[display_df["journey_stage"].isin(selected_stages)]
-
-    display_df = add_lifecycle_display_columns(display_df, static_df, m_cap)
-
-    st.caption(f"Showing {len(display_df)} lifecycle candidates after UI filters.")
-    render_lifecycle_table_with_chart(display_df, "base_phase", source_df=lifecycle_df)
-
-
-
-def render_tracking_phase_page(static_df, m_cap):
-    render_lifecycle_control_styles()
-    st.title("Tracking Phase")
-    st.info("Review active bases that are being carried forward after they became tracking-eligible.")
-    render_lifecycle_tracking_source_selector()
-
-    tracking_state = load_tracking_state()
-    active_tracking_df = tracking_state.get("active", pd.DataFrame())
-    history_tracking_df = tracking_state.get("history", pd.DataFrame())
-    archived_tracking_df = tracking_state.get("archived", pd.DataFrame())
-    active_tracking_df = ensure_journey_stage(active_tracking_df)
-    history_tracking_df = ensure_journey_stage(history_tracking_df)
-    archived_tracking_df = ensure_journey_stage(archived_tracking_df)
-
-    current_tracking_date = latest_tracking_date(history_tracking_df)
-    activity_events = build_lifecycle_activity_events(history_tracking_df)
-    active_tracking_df = derive_lifecycle_today_status(
-        active_tracking_df,
-        history_tracking_df,
-        reference_date=current_tracking_date,
-        activity_events=activity_events,
-    )
-    history_tracking_df = derive_lifecycle_today_status(
-        history_tracking_df,
-        history_tracking_df,
-        row_date_column="tracking_date",
-        activity_events=activity_events,
-    )
-    archived_tracking_df = derive_lifecycle_today_status(
-        archived_tracking_df,
-        history_tracking_df,
-        reference_date=current_tracking_date,
-        activity_events=activity_events,
-    )
-
-    selected_windows = render_lifecycle_window_filter(
-        [active_tracking_df, history_tracking_df, archived_tracking_df],
-        "tracking_phase_windows",
-    )
-    active_tracking_df = filter_lifecycle_windows(
-        active_tracking_df, selected_windows
-    )
-    history_tracking_df = filter_lifecycle_windows(
-        history_tracking_df, selected_windows
-    )
-    archived_tracking_df = filter_lifecycle_windows(
-        archived_tracking_df, selected_windows
-    )
-    active_tracking_df = collapse_equivalent_lifecycle_rows(active_tracking_df)
-    # Tracking persistence already uses one row per base_id/date. Running the
-    # structural equivalence matcher again across the complete history is
-    # quadratic within every symbol/date group and made a 32k-row history take
-    # minutes to open. Keep the stored window-aware history as-is.
-    archived_tracking_df = collapse_equivalent_lifecycle_rows(archived_tracking_df)
-
-    if "journey_stage" in active_tracking_df.columns:
-        active_tracking_df = active_tracking_df[
-            active_tracking_df["journey_stage"] != "NOT_TRACKED"
-        ].copy()
-
-    metric_cols = st.columns(3)
-    metric_cols[0].metric("Active Bases", len(active_tracking_df))
-    metric_cols[1].metric("History Rows", len(history_tracking_df))
-    metric_cols[2].metric("Archived Bases", len(archived_tracking_df))
-
-    tracking_tabs = st.tabs(["Active", "History", "Archived"])
-    tracking_frames = [
-        active_tracking_df,
-        history_tracking_df.sort_values("tracking_date", ascending=False)
-        if "tracking_date" in history_tracking_df.columns
-        else history_tracking_df,
-        archived_tracking_df,
-    ]
-
-    for tab, label, frame in zip(tracking_tabs, ["Active", "History", "Archived"], tracking_frames):
-        with tab:
-            frame = render_today_status_filter(
-                frame,
-                f"tracking_{label.lower()}_today_status",
-                label=(
-                    "Activity on row date"
-                    if label == "History"
-                    else "Activity on latest tracking date"
-                ),
-            )
-            if frame.empty:
-                st.info(f"No {label.lower()} tracking rows yet.")
-                continue
-
-            display_df = add_lifecycle_display_columns(
-                frame,
-                static_df,
-                m_cap,
-            )
-            render_lifecycle_table_with_chart(display_df, f"tracking_{label.lower()}", source_df=frame)
+    render_failure_review(static_df, m_cap)
