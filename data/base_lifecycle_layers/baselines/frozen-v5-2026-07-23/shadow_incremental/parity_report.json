@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "expected_rows": 32724,
+  "actual_rows": 32724,
+  "shared_rows": 32724,
+  "missing_rows": 0,
+  "unexpected_rows": 0,
+  "expected_duplicate_rows": 0,
+  "actual_duplicate_rows": 0,
+  "missing_columns": [],
+  "field_mismatches": {},
+  "total_mismatches": 0,
+  "examples": [],
+  "shadow_history_path": "C:\\Users\\Praveen Yadav\\OneDrive\\Projects\\strategies\\data\\base_lifecycle_layers\\baselines\\frozen-v5-2026-07-23\\shadow_incremental\\tracking_history.parquet",
+  "checkpoint_path": "C:\\Users\\Praveen Yadav\\OneDrive\\Projects\\strategies\\data\\base_lifecycle_layers\\baselines\\frozen-v5-2026-07-23\\shadow_incremental\\state\\latest_checkpoints.parquet",
+  "event_path": "C:\\Users\\Praveen Yadav\\OneDrive\\Projects\\strategies\\data\\base_lifecycle_layers\\baselines\\frozen-v5-2026-07-23\\shadow_incremental\\state\\lifecycle_events.parquet",
+  "checkpoint_count": 887,
+  "event_count": 2651
+}

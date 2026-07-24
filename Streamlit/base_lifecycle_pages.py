@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pandas as pd
 import streamlit as st
@@ -15,6 +16,13 @@ from tradingview_lifecycle_chart import render_tradingview_lifecycle_chart
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 TRACKING_DIR = ROOT_DIR / "data" / "base_lifecycle_tracking"
+LIFECYCLE_BASELINE_DIR = (
+    ROOT_DIR / "data" / "base_lifecycle_layers" / "baselines"
+)
+LIFECYCLE_PRODUCTION_DIR = (
+    ROOT_DIR / "data" / "base_lifecycle_layers" / "production"
+)
+TRACKING_SOURCE_SESSION_KEY = "lifecycle_tracking_data_source"
 STAGE_KEYS = [
     "daily_trend_passed",
     "weekly_data_passed",
@@ -99,7 +107,127 @@ def long_frame_to_stage_results(stage_df):
     }
 
 
+def tracking_state_from_history(history_df):
+    """Derive current active/archive tables from an append-only history."""
+    if history_df is None or history_df.empty:
+        return {
+            "active": pd.DataFrame(),
+            "history": pd.DataFrame(),
+            "archived": pd.DataFrame(),
+        }
+    history = history_df.copy()
+    history["tracking_date"] = pd.to_datetime(
+        history["tracking_date"], errors="coerce"
+    )
+    latest = (
+        history.sort_values("tracking_date", kind="stable")
+        .drop_duplicates("base_id", keep="last")
+        .reset_index(drop=True)
+    )
+    archived_mask = latest.get(
+        "tracking_state",
+        pd.Series("ACTIVE", index=latest.index),
+    ).eq("ARCHIVED")
+    active = latest[~archived_mask].copy()
+    archived = latest[archived_mask].copy()
+    if not archived.empty and "archived_date" not in archived.columns:
+        archived["archived_date"] = archived["tracking_date"]
+    return {
+        "active": active.reset_index(drop=True),
+        "history": history.reset_index(drop=True),
+        "archived": archived.reset_index(drop=True),
+    }
+
+
+def available_lifecycle_tracking_sources():
+    """Return production plus validated incremental shadow histories."""
+    sources = {
+        "Production tracking": {
+            "kind": "production",
+            "tracking_dir": TRACKING_DIR,
+            "caption": "Existing dashboard tracking files",
+        }
+    }
+    if not LIFECYCLE_BASELINE_DIR.exists():
+        baseline_dirs = []
+    else:
+        baseline_dirs = sorted(
+            LIFECYCLE_BASELINE_DIR.iterdir(), reverse=True
+        )
+    for baseline_dir in baseline_dirs:
+        shadow_dir = baseline_dir / "shadow_incremental"
+        history_path = shadow_dir / "tracking_history.parquet"
+        report_path = shadow_dir / "parity_report.json"
+        if history_path.exists() and report_path.exists():
+            try:
+                with report_path.open(encoding="utf-8") as handle:
+                    report = json.load(handle)
+            except (OSError, ValueError):
+                report = {}
+            if bool(report.get("passed")) and int(
+                report.get("total_mismatches", -1)
+            ) == 0:
+                label = f"Incremental Shadow · {baseline_dir.name} (validated)"
+                sources[label] = {
+                    "kind": "shadow",
+                    "history_path": history_path,
+                    "report_path": report_path,
+                    "caption": (
+                        f"{int(report.get('actual_rows', 0)):,} rows · "
+                        f"{int(report.get('total_mismatches', 0))} parity mismatches"
+                    ),
+                }
+    production_history = (
+        LIFECYCLE_PRODUCTION_DIR / "views" / "tracking_history.parquet"
+    )
+    production_manifest = LIFECYCLE_PRODUCTION_DIR / "manifest.json"
+    if production_history.exists() and production_manifest.exists():
+        try:
+            with production_manifest.open(encoding="utf-8") as handle:
+                manifest = json.load(handle)
+        except (OSError, ValueError):
+            manifest = {}
+        if manifest.get("last_committed_date"):
+            sources["Checkpoint Production"] = {
+                "kind": "shadow",
+                "history_path": production_history,
+                "caption": (
+                    f"Committed through {manifest['last_committed_date']}"
+                ),
+            }
+    return sources
+
+
+def render_lifecycle_tracking_source_selector():
+    sources = available_lifecycle_tracking_sources()
+    labels = list(sources)
+    default_index = len(labels) - 1 if len(labels) > 1 else 0
+    selected = st.selectbox(
+        "Lifecycle data source",
+        options=labels,
+        index=default_index,
+        key=TRACKING_SOURCE_SESSION_KEY,
+        help=(
+            "Validated shadow results are isolated from production. Switching "
+            "this control changes only what the lifecycle pages display."
+        ),
+    )
+    source = sources[selected]
+    if source["kind"] == "shadow":
+        st.caption(f"Using {selected} · {source['caption']}")
+    else:
+        st.caption("Using existing production lifecycle tracking files.")
+    return source
+
+
 def load_tracking_state():
+    sources = available_lifecycle_tracking_sources()
+    selected_label = st.session_state.get(TRACKING_SOURCE_SESSION_KEY)
+    source = sources.get(selected_label, sources["Production tracking"])
+    if source["kind"] == "shadow":
+        history = pd.read_parquet(source["history_path"])
+        return tracking_state_from_history(history)
+
     paths = {
         "active": TRACKING_DIR / "active_tracked_bases.parquet",
         "history": TRACKING_DIR / "tracking_history.parquet",
@@ -762,6 +890,7 @@ def render_lifecycle_journey_page(static_df, m_cap):
     st.caption(
         "Current stock journey in three review groups. Select a row to open its chart."
     )
+    render_lifecycle_tracking_source_selector()
 
     journey_df = load_current_journey_rows()
     if journey_df.empty:
@@ -967,6 +1096,7 @@ def render_base_phase_page(static_df, m_cap):
     render_lifecycle_control_styles()
     st.title("Base Phase")
     st.info("Review saved base snapshots. Run scans from the command line while the engine logic is evolving.")
+    render_lifecycle_tracking_source_selector()
 
     selected_snapshot_date = select_lifecycle_snapshot_date("base_lifecycle_snapshot_date")
     lifecycle_df, _all_windows_df, stage_results = load_lifecycle_saved_state(selected_snapshot_date)
@@ -1034,6 +1164,7 @@ def render_tracking_phase_page(static_df, m_cap):
     render_lifecycle_control_styles()
     st.title("Tracking Phase")
     st.info("Review active bases that are being carried forward after they became tracking-eligible.")
+    render_lifecycle_tracking_source_selector()
 
     tracking_state = load_tracking_state()
     active_tracking_df = tracking_state.get("active", pd.DataFrame())
@@ -1078,9 +1209,10 @@ def render_tracking_phase_page(static_df, m_cap):
         archived_tracking_df, selected_windows
     )
     active_tracking_df = collapse_equivalent_lifecycle_rows(active_tracking_df)
-    history_tracking_df = collapse_equivalent_lifecycle_rows(
-        history_tracking_df, date_column="tracking_date"
-    )
+    # Tracking persistence already uses one row per base_id/date. Running the
+    # structural equivalence matcher again across the complete history is
+    # quadratic within every symbol/date group and made a 32k-row history take
+    # minutes to open. Keep the stored window-aware history as-is.
     archived_tracking_df = collapse_equivalent_lifecycle_rows(archived_tracking_df)
 
     if "journey_stage" in active_tracking_df.columns:

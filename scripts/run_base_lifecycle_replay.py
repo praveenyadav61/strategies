@@ -10,7 +10,13 @@ for path in [PROJECT_ROOT, STREAMLIT_DIR]:
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from base_lifecycle_scanner import DEFAULT_PARAMS, DATA_PATH, run_tracking_replay
+from base_lifecycle_scanner import (
+    DEFAULT_PARAMS,
+    DATA_PATH,
+    SCAN_HISTORY_DIR,
+    TRACKING_DIR,
+    run_tracking_replay,
+)
 
 
 def parse_windows(value):
@@ -113,6 +119,16 @@ def main():
     parser.add_argument("--breakout-range", type=float, default=10.0, help="Percent above/below pivot")
     parser.add_argument("--breakout-stall-weeks", type=int, default=10)
     parser.add_argument("--data-path", default=DATA_PATH)
+    parser.add_argument(
+        "--scan-dir",
+        default=SCAN_HISTORY_DIR,
+        help="Scanner snapshot output directory.",
+    )
+    parser.add_argument(
+        "--tracking-dir",
+        default=TRACKING_DIR,
+        help="Lifecycle tracking output directory.",
+    )
     parser.add_argument("--no-tracking", action="store_true", help="Save scanner snapshots without updating tracking files.")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -128,6 +144,8 @@ def main():
         args.end_date,
         frequency=args.frequency,
         data_path=args.data_path,
+        scan_dir=args.scan_dir,
+        tracking_dir=args.tracking_dir,
         debug=args.debug,
         update_tracking=not args.no_tracking,
         progress_callback=print_replay_progress,
