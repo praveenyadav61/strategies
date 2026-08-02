@@ -11,6 +11,7 @@ from lifecycle_incremental import (
     advance_lifecycle_state,
     initialize_lifecycle_state,
     lifecycle_snapshot,
+    resolve_left_setup_atr,
 )
 from lifecycle_parity import compare_tracking_history
 from base_lifecycle_scanner import (
@@ -74,7 +75,15 @@ def run_shadow_incremental(
         }
         first_date = prepared.index[0]
         first_candle = {**prepared.iloc[0].to_dict(), "date": first_date}
-        state = initialize_lifecycle_state(structure, first_candle, params)
+        state = initialize_lifecycle_state(
+            structure,
+            first_candle,
+            params,
+            left_setup_atr=resolve_left_setup_atr(
+                prepared,
+                structure_row["left_high_index"],
+            ),
+        )
         candle_position = 1
 
         for _, expected_row in base_rows.iterrows():

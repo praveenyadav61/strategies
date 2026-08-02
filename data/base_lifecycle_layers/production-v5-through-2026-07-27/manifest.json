@@ -1,0 +1,14 @@
+{
+  "artifact_type": "base_lifecycle_layered_production",
+  "baseline_end_date": "2026-07-23",
+  "baseline_name": "frozen-v5-2026-07-23",
+  "created_at_utc": "2026-07-24T13:35:45.640465+00:00",
+  "last_committed_date": "2026-07-27",
+  "last_structure_week_end": "2026-07-24",
+  "latest_checkpoint_dir": "dates\\2026-07-27\\state",
+  "latest_structure_dir": "dates\\2026-07-27\\structures",
+  "schema_version": 1,
+  "seed_history_path": "bootstrap\\tracking_history.parquet",
+  "strategy_config_hash": "b08da6507d486173ccfabc69d25bee8d240b20683de5fa88809b9020d90395d7",
+  "updated_at_utc": "2026-07-27T19:09:53.469510+00:00"
+}

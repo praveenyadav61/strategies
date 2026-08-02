@@ -11,7 +11,7 @@ from base_structure_identity import bases_are_equivalent
 from lifecycle_checkpoints import config_hash
 
 
-STRUCTURE_SCHEMA_VERSION = 1
+STRUCTURE_SCHEMA_VERSION = 2
 STRUCTURE_COLUMNS = [
     "base_id",
     "Symbol",
@@ -36,7 +36,6 @@ STRUCTURE_COLUMNS = [
     "largest_single_week_move",
     "largest_single_week_move_date",
     "largest_single_week_move_to_depth_ratio",
-    "max_single_week_move_to_depth_ratio",
     "tracking_eligible_recovery_min",
     "equivalent_base_windows",
     "equivalent_window_count",

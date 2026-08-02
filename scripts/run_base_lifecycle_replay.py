@@ -31,7 +31,6 @@ def build_params(args):
     params.update(
         {
             "MIN_WEEKS": args.min_weeks,
-            "MIN_BASE_DURATION_WEEKS": args.min_base_duration,
             "MAX_WEEKS": max(args.base_windows),
             "BASE_WINDOWS": args.base_windows,
             "MIN_WEEKLY_BARS_REQUIRED": args.min_weeks + 2,
@@ -46,7 +45,6 @@ def build_params(args):
             "PRIOR_UPTREND_MIN_LOOKBACK_WEEKS": args.prior_uptrend_min_lookback,
             "PRIOR_UPTREND_MAX_LOOKBACK_WEEKS": args.prior_uptrend_max_lookback,
             "PRIOR_UPTREND_MIN_ADVANCE_WEEKS": args.prior_uptrend_min_advance,
-            "MIN_PEAK_TO_LOW_WEEKS": args.min_peak_to_low_weeks,
             "ATR_WINDOW": args.atr_window,
             "COMPRESSION_LOOKBACK": args.compression_lookback,
             "BREAKOUT_PRICE_BUFFER_PCT": args.breakout_price_buffer / 100.0,
@@ -92,14 +90,8 @@ def main():
     )
     parser.add_argument("--base-windows", type=parse_windows, default=parse_windows("104,52,26"))
     parser.add_argument("--min-weeks", type=int, default=8)
-    parser.add_argument(
-        "--min-base-duration",
-        type=int,
-        default=12,
-        help="Minimum weeks from left high to handle pivot, breakout, or current structure",
-    )
     parser.add_argument("--min-depth", type=float, default=15.0, help="Percent")
-    parser.add_argument("--max-depth", type=float, default=60.0, help="Percent")
+    parser.add_argument("--max-depth", type=float, default=65.0, help="Percent")
     parser.add_argument("--recovery-min", type=float, default=40.0, help="Lifecycle discovery recovery percent")
     parser.add_argument("--tracking-recovery-min", type=float, default=40.0, help="Lifecycle persistence recovery percent")
     parser.add_argument("--consideration-recovery-min", type=float, default=85.0, help="Breakout consideration recovery percent")
@@ -109,7 +101,6 @@ def main():
     parser.add_argument("--prior-uptrend-min-lookback", type=int, default=12)
     parser.add_argument("--prior-uptrend-max-lookback", type=int, default=52)
     parser.add_argument("--prior-uptrend-min-advance", type=int, default=4)
-    parser.add_argument("--min-peak-to-low-weeks", type=int, default=6)
     parser.add_argument("--atr-window", type=int, default=14)
     parser.add_argument("--compression-lookback", type=int, default=10)
     parser.add_argument("--breakout-price-buffer", type=float, default=0.5, help="Percent")

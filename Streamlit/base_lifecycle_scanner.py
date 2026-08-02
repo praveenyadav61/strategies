@@ -48,24 +48,21 @@ PIVOT_MAX_BASE_RECOVERY = 1.10
 
 DEFAULT_PARAMS = {
     "MIN_WEEKS": 8,
-    "MIN_BASE_DURATION_WEEKS": 12,
     "MAX_WEEKS": 104,
     "BASE_WINDOWS": [104, 52, 26],
     "MIN_WEEKLY_BARS_REQUIRED": 10,
     "MIN_DEPTH": 0.15,
-    "MAX_DEPTH": 0.60,
-    "MAX_SINGLE_WEEK_MOVE_TO_DEPTH_RATIO": 0.50,
+    "MAX_DEPTH": 0.65,
     "RECOVERY_MIN": 0.40,
     "TRACKING_ELIGIBLE_RECOVERY_MIN": 0.40,
     "BREAKOUT_CONSIDERATION_RECOVERY_MIN": 0.85,
-    "STRATEGY_VERSION": "base_lifecycle_v5_daily_handle",
+    "STRATEGY_VERSION": "base_lifecycle_2026-07-31",
     "MIN_PRIOR_UPTREND_PCT": 0.20,
     "PRIOR_UPTREND_DEPTH_MULTIPLIER": 1.0,
     "PRIOR_UPTREND_LOOKBACK_RATIO": 0.50,
     "PRIOR_UPTREND_MIN_LOOKBACK_WEEKS": 12,
     "PRIOR_UPTREND_MAX_LOOKBACK_WEEKS": 52,
     "PRIOR_UPTREND_MIN_ADVANCE_WEEKS": 4,
-    "MIN_PEAK_TO_LOW_WEEKS": 6,
     "EQUIVALENT_BASE_LEFT_HIGH_MAX_WEEKS": 2,
     "EQUIVALENT_BASE_LOW_MAX_WEEKS": 1,
     "EQUIVALENT_BASE_LEFT_HIGH_PRICE_TOLERANCE_PCT": 0.05,
@@ -367,8 +364,7 @@ def check_lifecycle_conditions(
             "scan_window_weeks": int(scan_window_weeks),
             "latest_close": latest_close,
         }
-        minimum_base_duration = int(params.get("MIN_BASE_DURATION_WEEKS", 12))
-        peak_exclusion_weeks = max(int(params["MIN_WEEKS"]), minimum_base_duration)
+        peak_exclusion_weeks = int(params["MIN_WEEKS"])
         peak_search_window = window.iloc[:-peak_exclusion_weeks]
         if peak_search_window.empty:
             record_stage(
@@ -397,18 +393,6 @@ def check_lifecycle_conditions(
         }
 
         stats.ath_filtered.append(symbol)
-
-        if peak_to_low_weeks < params.get("MIN_PEAK_TO_LOW_WEEKS", 6):
-            record_stage(
-                stage_results,
-                "rejected",
-                {
-                    **evaluated_row,
-                    "failure_reason": "base_low_too_close_to_left_high",
-                    "min_peak_to_low_weeks": float(params.get("MIN_PEAK_TO_LOW_WEEKS", 6)),
-                },
-            )
-            return None
 
         depth = (peak_price - bottom_price) / peak_price
         if not (params["MIN_DEPTH"] <= depth <= params["MAX_DEPTH"]):
@@ -521,22 +505,6 @@ def check_lifecycle_conditions(
             window.index[-1],
         )
         base_duration_weeks = (base_end_date - peak_idx).days / 7
-        if base_duration_weeks < minimum_base_duration:
-            record_stage(
-                stage_results,
-                "rejected",
-                {
-                    **evaluated_row,
-                    "Depth": float(depth),
-                    "base_age_weeks": round(float(base_age_weeks), 1),
-                    "base_duration_weeks": round(float(base_duration_weeks), 1),
-                    "base_end_date": base_end_date,
-                    "base_end_reason": base_end_reason,
-                    "failure_reason": "base_duration_too_short",
-                    "min_base_duration_weeks": minimum_base_duration,
-                },
-            )
-            return None
         base_move_window = window.loc[peak_idx:base_end_date].copy()
         single_week_metrics = calculate_single_week_move_metrics(
             base_move_window,
@@ -545,28 +513,6 @@ def check_lifecycle_conditions(
                 base_end_date if base_end_reason == "BREAKOUT" else None
             ),
         )
-        largest_move_ratio = single_week_metrics[
-            "largest_single_week_move_to_depth_ratio"
-        ]
-        max_single_week_ratio = float(
-            params.get("MAX_SINGLE_WEEK_MOVE_TO_DEPTH_RATIO", 0.50)
-        )
-        if pd.notna(largest_move_ratio) and largest_move_ratio > max_single_week_ratio:
-            record_stage(
-                stage_results,
-                "rejected",
-                {
-                    **evaluated_row,
-                    "Depth": float(depth),
-                    "base_duration_weeks": round(float(base_duration_weeks), 1),
-                    "base_end_date": base_end_date,
-                    "base_end_reason": base_end_reason,
-                    **single_week_metrics,
-                    "failure_reason": "single_week_move_too_large",
-                    "max_single_week_move_to_depth_ratio": max_single_week_ratio,
-                },
-            )
-            return None
         pivot = float(pivot_lifecycle["selected_pivot"])
         pivot_date = pd.to_datetime(pivot_lifecycle.get("selected_pivot_date"), errors="coerce")
         pivot_idx_i = (
@@ -618,7 +564,6 @@ def check_lifecycle_conditions(
             "base_end_date": base_end_date,
             "base_end_reason": base_end_reason,
             **single_week_metrics,
-            "max_single_week_move_to_depth_ratio": max_single_week_ratio,
             "Depth": float(depth),
             "recovery_pct": float(recovery_pct),
             "distance_from_left_high_pct": float(distance_from_left_high_pct),
@@ -647,7 +592,7 @@ def check_lifecycle_conditions(
             "signal_as_of_date": pd.to_datetime(signal_as_of_date, errors="coerce"),
             "journey_stage": journey_stage,
             "strategy_version": params.get(
-                "STRATEGY_VERSION", "base_lifecycle_v5_daily_handle"
+                "STRATEGY_VERSION", "base_lifecycle_2026-07-31"
             ),
             "base_window_weeks": int(scan_window_weeks),
             "tracking_eligible_recovery_min": float(params.get("TRACKING_ELIGIBLE_RECOVERY_MIN", 0.40)),
@@ -2010,11 +1955,8 @@ def update_tracking_row(row, as_of_date, data_engine, params=None):
                 "base_end_reason": base_end_reason,
                 "base_duration_weeks": float(base_duration_weeks),
                 **single_week_metrics,
-                "max_single_week_move_to_depth_ratio": float(
-                    params.get("MAX_SINGLE_WEEK_MOVE_TO_DEPTH_RATIO", 0.50)
-                ),
                 "strategy_version": params.get(
-                    "STRATEGY_VERSION", "base_lifecycle_v5_daily_handle"
+                    "STRATEGY_VERSION", "base_lifecycle_2026-07-31"
                 ),
                 "base_window_weeks": int(
                     updated.get("base_window_weeks", updated.get("scan_window_weeks", 0))

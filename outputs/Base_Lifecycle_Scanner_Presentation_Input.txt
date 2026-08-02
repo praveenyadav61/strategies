@@ -1,0 +1,361 @@
+BASE LIFECYCLE SCANNER — TOP-DOWN PRESENTATION INPUT
+
+Create a crisp, professional 16:9 presentation with 10 main slides.
+
+Audience and style:
+- Make the system understandable without assuming detailed strategy or engineering knowledge.
+- Start with the purpose and overall system before explaining individual rules.
+- Use plain language first; show formulas only in the appendix.
+- Use a minimal white and light-grey visual system with black typography.
+- Prefer one strong visual or message per slide.
+- Avoid decorative market imagery and invented UI screenshots.
+- Do not repeatedly use audience labels such as “trader” or “quant.”
+
+Core story:
+The Base Lifecycle Scanner converts proven growth-stock principles and accumulated market experience into explicit rules. It identifies valid structures, remembers their journey, advances them one completed candle at a time, and produces explainable state that can support systematic execution.
+
+==================================================
+SLIDE 1 — THE BIG IDEA
+==================================================
+
+Title:
+Base Lifecycle Scanner
+
+Subtitle:
+From pattern detection to persistent lifecycle memory
+
+Three supporting lines:
+- Proven principles translated into rules
+- Every valid structure retains its history
+- Ready for systematic execution
+
+Key message:
+This is not simply a scanner that generates a new list every day. It is a stateful system that remembers how each valid base develops.
+
+Visual:
+A simple journey line:
+Pattern found → Developing → Actionable → Breakout → Success or Failure
+
+==================================================
+SLIDE 2 — THE SYSTEM AT A GLANCE
+==================================================
+
+Title:
+One system connects method, market data and decisions
+
+Show one left-to-right system diagram:
+
+INPUTS
+- O’Neil principles
+- Minervini principles
+- Accumulated market experience
+- Completed weekly and daily candles
+
+RULE ENGINE
+- Discover valid bases
+- Measure recovery
+- Identify one actionable pivot
+- Evaluate breakout, success and failure
+
+LIFECYCLE MEMORY
+- Stable structure identity
+- Current state
+- Historical events
+- Persistent outcomes
+
+OUTPUTS
+- What is developing
+- What is actionable
+- What has succeeded or failed
+- Auditable data for systematic execution
+
+Key message:
+The system turns qualitative market knowledge into repeatable decisions while preserving the original context.
+
+==================================================
+SLIDE 3 — THE LIFECYCLE
+==================================================
+
+Title:
+Every valid base moves through the same lifecycle
+
+Stage 1 — Discover:
+A completed weekly structure passes depth, duration, trend and prior-advance checks.
+
+Stage 2 — Recover:
+Price progresses from the base low toward the left-side high.
+
+Stage 3 — Prepare:
+The structure reaches the review zone and one actionable pivot is identified.
+
+Stage 4 — Breakout:
+Price crosses a volatility-aware trigger above the pivot.
+
+Stage 5 — Resolve:
+The system records success, warning or failure without erasing earlier history.
+
+Important distinction:
+- Recovery can move forward or backward.
+- Breakout, success and failure are historical events and remain recorded.
+
+Visual:
+Use one horizontal lifecycle arrow with five stages. Avoid separate cards if the journey can be shown as one connected flow.
+
+==================================================
+SLIDE 4 — HOW EXPERIENCE BECOMES CODE
+==================================================
+
+Title:
+Proven methodology becomes explicit system behaviour
+
+O’Neil contributes:
+- Constructive base structure
+- Pivot and breakout concepts
+- Demand-led follow-through
+
+Minervini contributes:
+- Trend-template alignment
+- Tightness and contraction
+- Setup quality and predefined risk
+
+Accumulated market experience contributes:
+- Lifecycle staging
+- Handle and pivot nuance
+- Treatment of false positives
+- Warning versus hard failure
+- Rules for unusual or ambiguous cases
+
+Translation into code:
+Principle → measurable condition → state transition → recorded event
+
+Key message:
+The goal is not to copy a methodology word for word. The goal is to convert durable principles and observed behaviour into deterministic rules and safeguards.
+
+==================================================
+SLIDE 5 — HOW THE SYSTEM DECIDES WHAT TO TRACK
+==================================================
+
+Title:
+A structure is validated before its recovery is measured
+
+Discovery:
+- Use only completed weekly candles.
+- Evaluate long, medium and shorter historical windows.
+- Find a valid left-side high followed by a later base low.
+
+Validation:
+- Base depth must be between 15% and 60%.
+- Base duration must be at least 12 weeks.
+- Prior advance, long-term trend and abnormal-week checks must pass.
+
+Consolidation:
+- Equivalent windows are grouped.
+- The largest representative window is retained.
+- Genuinely different nested structures remain separate.
+
+Tracking:
+- The structure enters the active lifecycle when recovery reaches 40%.
+
+Key message:
+The system first proves that the structure is meaningful. Only then does it begin lifecycle tracking.
+
+==================================================
+SLIDE 6 — HOW THE SYSTEM DECIDES WHAT IS ACTIONABLE
+==================================================
+
+Title:
+Recovery, pivot and outcome are separate decisions
+
+Recovery state:
+- Below 40%: recorded but outside the main review flow
+- 40% to below 85%: Recovery Building
+- 85% or higher: Breakout Consideration
+
+Actionable pivot:
+- Begin with the original left-side high.
+- Replace it only when a valid handle candidate is confirmed.
+- Maintain only one active pivot.
+- Freeze the pivot when breakout occurs.
+
+Outcome:
+- Breakout requires a close above a volatility-aware trigger.
+- Success requires meaningful follow-through beyond the pivot and old supply.
+- Failure uses separate warning and hard-failure levels.
+
+Key message:
+The system does not treat recovery, entry, success and failure as the same threshold. Each answers a different question.
+
+Visual:
+Use three clearly separated layers:
+Recovery → Action level → Outcome
+
+==================================================
+SLIDE 7 — WHAT PRODUCTION LOOKS LIKE
+==================================================
+
+Title:
+Production snapshot — 24 July 2026
+
+System scale:
+- 919 lifecycle checkpoints
+- 955 tracked structures
+- 33,590 history rows
+
+Current state:
+- 427 Recovery Building
+- 102 Breakout Consideration
+- 187 Successful Breakouts
+- 56 Failed
+- 147 Not Tracked
+
+Validation:
+- Latest committed market date: 24 July 2026
+- Production-state validation passed
+
+Visual instruction:
+Use an authentic UI screenshot if supplied. Highlight the state summary and one selected structure.
+
+If no authentic screenshot is supplied:
+Use clean metric blocks and label the slide “Production snapshot.” Do not create a fake interface.
+
+Key message:
+Complex historical data is compressed into a small set of understandable operational states.
+
+==================================================
+SLIDE 8 — THREE EXAMPLES, ONE CONSISTENT LANGUAGE
+==================================================
+
+Title:
+The same lifecycle explains three very different situations
+
+FLUOROCHEM — Recovery Building:
+- 104-week base
+- 84.5% recovered
+- Pivot: ₹4,877.10
+- Close: ₹4,573.70
+
+Meaning:
+The structure is developing but has not yet entered the actionable review zone.
+
+LALPATHLAB — Breakout Consideration:
+- 104-week base
+- 93.3% recovered
+- Daily handle ready
+- Pivot: ₹1,798.66
+- Close: ₹1,759.20
+- 2.2% below pivot
+
+Meaning:
+The structure is sufficiently recovered and has an actionable level, but breakout has not occurred.
+
+HUHTAMAKI — Successful Breakout:
+- 52-week base
+- Breakout: 22 July
+- Success: 24 July
+- Pivot: ₹272.65
+- Close: ₹318.68
+- 16.9% above pivot
+
+Meaning:
+The system preserves the breakout event and the later success outcome.
+
+Key message:
+The value is not merely finding symbols. It is explaining where each structure is in its journey.
+
+==================================================
+SLIDE 9 — WHY THE SYSTEM CAN BE TRUSTED
+==================================================
+
+Title:
+Speed is useful only when it reproduces the truth
+
+Architecture:
+- Weekly structures are stored in a persistent registry.
+- Each completed daily candle advances the previous state.
+- Every important transition creates an event.
+- Dashboard views are projections; they do not rewrite structural facts.
+- Processing is idempotent and can be reconstructed.
+
+Frozen parity result:
+- 32,724 full-replay rows
+- 32,724 incremental rows
+- 887 unique bases
+- Zero missing rows
+- Zero unexpected rows
+- Zero field mismatches
+- Result: PASS
+
+Important qualification:
+Parity proves that the incremental implementation reproduces the validated reconstruction. It is implementation evidence, not a claim about future market performance.
+
+Key message:
+The production path is faster, but it remains independently reproducible and auditable.
+
+==================================================
+SLIDE 10 — THE TAKEAWAY
+==================================================
+
+Title:
+From expert judgment to an auditable operating system
+
+What has been achieved:
+- Proven ideas expressed as testable rules
+- One consistent lifecycle for every valid structure
+- Current condition separated from historical outcome
+- Production state that is explainable and reproducible
+- A clean foundation for systematic execution
+
+Closing statement:
+The result is not simply a faster scanner. It is a disciplined translation of proven methodology and accumulated market experience into persistent, testable and production-ready state.
+
+Optional closing visual:
+Method + Experience + Data
+→ Rules
+→ Lifecycle Memory
+→ Explainable Decisions
+→ Systematic Execution
+
+==================================================
+OPTIONAL APPENDIX — USE ONLY IF QUESTIONS GO DEEPER
+==================================================
+
+APPENDIX A — RECOVERY FORMULA
+
+Recovery percentage =
+(Current close − Base low) ÷ (Left-side high − Base low)
+
+Interpretation:
+- Below 40%: outside main review flow
+- 40% to below 85%: Recovery Building
+- 85% or higher: Breakout Consideration
+
+--------------------------------------------------
+APPENDIX B — BREAKOUT AND FAILURE LEVELS
+
+Breakout trigger:
+Pivot + maximum of:
+- 0.5% of pivot
+- 0.20 × ATR14
+
+Hard-failure level:
+0.90 × pivot − buffer
+
+Buffer:
+Maximum of:
+- 1% of pivot
+- 0.25 × ATR
+
+--------------------------------------------------
+APPENDIX C — LIVE DEMONSTRATION
+
+Place the live demonstration after Slide 7 or Slide 8.
+
+Keep it under three minutes:
+1. Show the latest state counts.
+2. Open one Recovery Building example.
+3. Show its recovery percentage and pivot.
+4. Open one Successful Breakout example.
+5. Show its breakout and success events.
+6. Return to the presentation for validation and the closing message.
+
+Keep Slides 7 and 8 available as the fallback if the live UI is unavailable.

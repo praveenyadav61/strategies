@@ -22,14 +22,33 @@ def _buffer(price, atr, price_pct, atr_multiplier):
     return max(price_part, atr_part)
 
 
-def initialize_lifecycle_state(structure, first_candle, params):
+def resolve_left_setup_atr(daily, left_high_date):
+    """Match batch replay's ATR selection for the left-high pivot."""
+    if daily.empty or "daily_atr_14" not in daily.columns:
+        return np.nan
+    left_high_date = pd.to_datetime(left_high_date, errors="coerce")
+    eligible = daily[daily.index <= left_high_date]
+    selected = eligible.iloc[-1] if not eligible.empty else daily.iloc[0]
+    value = selected.get("daily_atr_14", np.nan)
+    return float(value) if pd.notna(value) else np.nan
+
+
+def initialize_lifecycle_state(
+    structure,
+    first_candle,
+    params,
+    *,
+    left_setup_atr=None,
+):
+    if left_setup_atr is None:
+        left_setup_atr = first_candle.get("daily_atr_14", np.nan)
     handle_state = initialize_daily_handle_state(
         left_high=float(structure["left_high"]),
         left_high_date=structure["left_high_index"],
         base_low=float(structure["base_low"]),
         base_depth=float(structure["Depth"]),
         resolved_base_low_date=structure["resolved_base_low_date"],
-        left_setup_atr=first_candle.get("daily_atr_14", np.nan),
+        left_setup_atr=left_setup_atr,
         first_candle=first_candle,
         params=params,
     )

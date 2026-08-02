@@ -2,6 +2,7 @@ import os
 import sys
 import types
 import unittest
+import logging
 from unittest.mock import patch
 
 import pandas as pd
@@ -16,9 +17,11 @@ if STREAMLIT_DIR not in sys.path:
 from base_lifecycle_scanner import (
     BaseLifecycleScanner,
     DEFAULT_PARAMS,
+    _calculate_daily_handle_state_legacy,
     build_base_id,
     build_replay_dates,
     calculate_single_week_move_metrics,
+    check_lifecycle_conditions,
     calculate_pivot_lifecycle,
     calculate_pivot_zone,
     calculate_daily_handle_state,
@@ -27,11 +30,18 @@ from base_lifecycle_scanner import (
     latest_completed_week_end,
     ordered_base_windows,
     prepare_new_tracking_rows,
+    remove_replaced_history_rows,
     resolve_base_end,
     resample_completed_weekly,
     update_tracking_row,
 )
 from base_structure_identity import bases_are_equivalent, consolidate_equivalent_bases
+from lifecycle_state_machine import (
+    advance_daily_handle_state,
+    daily_handle_result,
+    initialize_daily_handle_state,
+)
+from modular_base_scanner import ScanStats
 
 
 def weekly_frame(highs, lows, closes, atr=1.0):
@@ -104,8 +114,103 @@ class JourneyStageTests(unittest.TestCase):
 
 
 class BaseDiscoveryTests(unittest.TestCase):
-    def test_peak_to_low_default_is_six_weeks(self):
-        self.assertEqual(DEFAULT_PARAMS["MIN_PEAK_TO_LOW_WEEKS"], 6)
+    def test_base_depth_range_is_15_to_65_percent(self):
+        self.assertEqual(DEFAULT_PARAMS["MIN_DEPTH"], 0.15)
+        self.assertEqual(DEFAULT_PARAMS["MAX_DEPTH"], 0.65)
+
+    def test_structural_measurements_have_no_rejection_parameters(self):
+        self.assertNotIn("MIN_PEAK_TO_LOW_WEEKS", DEFAULT_PARAMS)
+        self.assertNotIn("MIN_BASE_DURATION_WEEKS", DEFAULT_PARAMS)
+        self.assertNotIn(
+            "MAX_SINGLE_WEEK_MOVE_TO_DEPTH_RATIO",
+            DEFAULT_PARAMS,
+        )
+
+    def test_all_structural_measurements_are_diagnostic_only(self):
+        highs = [80.0] * 30
+        lows = [75.0] * 30
+        closes = [78.0] * 30
+        highs[5] = 100.0
+        lows[6] = 70.0
+        closes[-1] = 95.0
+        frame = weekly_frame(highs, lows, closes)
+        prior_metrics = {
+            "prior_uptrend_pct": 0.50,
+            "prior_uptrend_lookback_weeks": 12,
+            "prior_uptrend_low_date": frame.index[0],
+            "prior_uptrend_low_price": 60.0,
+            "prior_uptrend_advance_weeks": 5.0,
+        }
+        pivot_lifecycle = {
+            "selected_pivot": 95.0,
+            "selected_pivot_date": frame.index[8],
+            "pivot_source": "HANDLE",
+            "lifecycle_phase": "TRACKING",
+            "breakout_date": pd.NaT,
+            "breakout_success": False,
+        }
+        move_metrics = {
+            "largest_single_week_move": 27.0,
+            "largest_single_week_move_date": frame.index[7],
+            "largest_single_week_move_to_depth_ratio": 0.90,
+        }
+
+        with (
+            patch(
+                "base_lifecycle_scanner.calculate_lifecycle_prior_uptrend",
+                return_value=prior_metrics,
+            ),
+            patch(
+                "base_lifecycle_scanner.calculate_pivot_lifecycle",
+                return_value=pivot_lifecycle,
+            ),
+            patch(
+                "base_lifecycle_scanner.calculate_single_week_move_metrics",
+                return_value=move_metrics,
+            ),
+        ):
+            result = check_lifecycle_conditions(
+                frame,
+                DEFAULT_PARAMS,
+                "TEST.NS",
+                ScanStats(),
+                logging.getLogger("test"),
+                ath=100.0,
+                scan_window_weeks=30,
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["peak_to_low_weeks"], 1.0)
+        self.assertEqual(result["base_duration_weeks"], 3.0)
+        self.assertEqual(
+            result["largest_single_week_move_to_depth_ratio"],
+            0.90,
+        )
+
+    def test_same_tracking_date_replaces_different_date_representations(self):
+        history = pd.DataFrame(
+            [
+                {"base_id": "AAA", "tracking_date": "2026-07-22"},
+                {"base_id": "AAA", "tracking_date": "2026-07-21"},
+                {"base_id": "BBB", "tracking_date": "2026-07-22"},
+            ]
+        )
+        current = pd.DataFrame(
+            [
+                {
+                    "base_id": "AAA",
+                    "tracking_date": pd.Timestamp("2026-07-22 00:00:00"),
+                }
+            ]
+        )
+
+        remaining = remove_replaced_history_rows(history, current)
+
+        self.assertEqual(len(remaining), 2)
+        self.assertEqual(
+            set(zip(remaining["base_id"], remaining["tracking_date"])),
+            {("AAA", "2026-07-21"), ("BBB", "2026-07-22")},
+        )
 
     def test_base_id_is_unique_per_window(self):
         common = {
@@ -366,6 +471,107 @@ class BaseDiscoveryTests(unittest.TestCase):
 
 
 class PivotLifecycleTests(unittest.TestCase):
+    def test_shared_transition_matches_frozen_legacy_reconstruction(self):
+        frame = daily_handle_frame()
+        comparable_fields = [
+            "selected_pivot",
+            "selected_pivot_date",
+            "pivot_source",
+            "daily_handle_state",
+            "daily_handle_candidate_pivot",
+            "daily_handle_candidate_date",
+            "daily_handle_sessions_after_pivot",
+            "daily_handle_confirmation_date",
+            "daily_handle_valid",
+            "daily_handle_invalidated",
+            "daily_handle_invalidation_date",
+            "daily_breakout_date",
+            "daily_breakout_atr",
+        ]
+
+        for end in range(1, len(frame) + 1):
+            window = frame.iloc[:end]
+            expected = _calculate_daily_handle_state_legacy(
+                window,
+                left_high=100,
+                left_high_date=frame.index[0],
+                base_low=70,
+                base_low_date=frame.index[5],
+                base_depth=0.30,
+                params=DEFAULT_PARAMS,
+            )
+            actual = calculate_daily_handle_state(
+                window,
+                left_high=100,
+                left_high_date=frame.index[0],
+                base_low=70,
+                base_low_date=frame.index[5],
+                base_depth=0.30,
+                params=DEFAULT_PARAMS,
+            )
+            for field in comparable_fields:
+                expected_value = expected.get(field)
+                actual_value = actual.get(field)
+                if pd.isna(expected_value) and pd.isna(actual_value):
+                    continue
+                self.assertEqual(
+                    actual_value,
+                    expected_value,
+                    msg=f"{field} differed at prefix {end}",
+                )
+
+    def test_incremental_transition_matches_shared_reconstruction(self):
+        frame = daily_handle_frame()
+        prepared = frame.copy()
+        previous_close = prepared["Close"].shift(1)
+        true_range = pd.concat(
+            [
+                prepared["High"] - prepared["Low"],
+                (prepared["High"] - previous_close).abs(),
+                (prepared["Low"] - previous_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        prepared["daily_atr_14"] = true_range.rolling(14, min_periods=1).mean()
+        state = initialize_daily_handle_state(
+            left_high=100,
+            left_high_date=frame.index[0],
+            base_low=70,
+            base_depth=0.30,
+            resolved_base_low_date=frame.index[5],
+            left_setup_atr=float(prepared["daily_atr_14"].iloc[0]),
+            first_candle={**prepared.iloc[0].to_dict(), "date": prepared.index[0]},
+            params=DEFAULT_PARAMS,
+        )
+        for candle_date, candle_row in prepared.iloc[1:].iterrows():
+            state, _events = advance_daily_handle_state(
+                state,
+                {**candle_row.to_dict(), "date": candle_date},
+                DEFAULT_PARAMS,
+            )
+            if pd.notna(state["breakout_date"]):
+                break
+        incremental = daily_handle_result(state, prepared)
+        reconstructed = calculate_daily_handle_state(
+            frame,
+            left_high=100,
+            left_high_date=frame.index[0],
+            base_low=70,
+            base_low_date=frame.index[5],
+            base_depth=0.30,
+            params=DEFAULT_PARAMS,
+        )
+
+        for field in [
+            "selected_pivot",
+            "selected_pivot_date",
+            "pivot_source",
+            "daily_handle_state",
+            "daily_handle_confirmation_date",
+            "daily_breakout_date",
+        ]:
+            self.assertEqual(incremental[field], reconstructed[field])
+
     def test_pivot_zone_is_relative_to_deep_base_depth(self):
         zone = calculate_pivot_zone(
             left_high=100,

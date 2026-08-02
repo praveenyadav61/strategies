@@ -24,6 +24,7 @@ from lifecycle_incremental import (
     advance_lifecycle_state,
     initialize_lifecycle_state,
     lifecycle_snapshot,
+    resolve_left_setup_atr,
 )
 from lifecycle_structure_registry import (
     StructureRegistryRepository,
@@ -213,7 +214,15 @@ def _bootstrap_structure_state(structure, daily, as_of_date, params):
         "resolved_base_low_date": resolved_low_date,
     }
     first = {**prepared.iloc[0].to_dict(), "date": prepared.index[0]}
-    state = initialize_lifecycle_state(structure_payload, first, params)
+    state = initialize_lifecycle_state(
+        structure_payload,
+        first,
+        params,
+        left_setup_atr=resolve_left_setup_atr(
+            prepared,
+            structure["left_high_index"],
+        ),
+    )
     events = []
     for candle_date, candle_row in prepared.iloc[1:].iterrows():
         state, current_events = advance_lifecycle_state(

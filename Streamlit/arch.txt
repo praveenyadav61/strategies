@@ -1,0 +1,12 @@
+| Area | Current rule | Effect |
+|---|---|---|
+| Trend | Latest close > EMA 200 and EMA 50 > EMA 200 | Hard requirement |
+| Weekly data | Only completed weekly candles are used | Prevents unstable midweek results |
+| Windows | Scans 104, 52 and 26-week windows | Finds long and shorter structures |
+| Left high | Highest price in the window, excluding the latest 8 weeks | Structural anchor |
+| Bottom | Lowest price occurring after the left high | Structural anchor |
+| Depth | Between 15% and 60% | Hard requirement |
+| Prior uptrend | Advance before the left high must be at least `max(20%, base depth)` | Hard requirement |
+| Prior advance duration | At least 4 weeks | Hard requirement |
+| Recovery | 40%+ enters tracking; 85%+ enters breakout consideration | Lifecycle classification |
+| Similar structures | Equivalent 104/52/26-week detections are merged | Avoids duplicates |

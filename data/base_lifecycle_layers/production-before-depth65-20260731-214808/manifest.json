@@ -1,0 +1,14 @@
+{
+  "artifact_type": "base_lifecycle_layered_production",
+  "baseline_end_date": "2026-07-28",
+  "baseline_name": "frozen-2026-07-29-relaxed",
+  "created_at_utc": "2026-07-31T11:34:23.859470+00:00",
+  "last_committed_date": "2026-07-28",
+  "last_structure_week_end": "2026-07-24",
+  "latest_checkpoint_dir": "bootstrap\\state",
+  "latest_structure_dir": "bootstrap\\structures",
+  "schema_version": 1,
+  "seed_history_path": "bootstrap\\tracking_history.parquet",
+  "strategy_config_hash": "eef27b031210130ac199b96b0aecd6c270b17f5933bf51931d97af8955d95b34",
+  "updated_at_utc": "2026-07-31T11:34:23.859477+00:00"
+}
