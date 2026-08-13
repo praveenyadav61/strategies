@@ -3,14 +3,15 @@
 Q1 FY27 Earnings Analysis - NIFTY 50
 ================================================================================
 
-Total Declared Companies (Q1 FY27): 42
-Companies with Q1 FY26 comparison: 42
+Total Declared Companies (Q1 FY27): 44
+Companies with Q1 FY26 comparison: 44
 
 
 TICKER             CUR_REV     PY_REV   YOY_REV%    QOQ_REV   QOQ_REV%     CUR_OP      PY_OP    YOY_OP%     QOQ_OP    QOQ_OP%   CUR_PROFIT    PY_PROFIT YOY_PROFIT%   QOQ_PROFIT QOQ_PROFIT%
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ADANIENT.NS     329240000000 219610000000     49.92% 324390000000      1.50% 50190000000 33100000000     51.63% 37310000000     34.52% -14620000000   9760000000    -249.80%  -1670000000    -775.45%
 ADANIPORTS.NS   108210000000 91260000000     18.57% 107380000000      0.77% 62530000000 54950000000     13.79% 60200000000      3.87%  36500000000  33110000000      10.24%  33080000000      10.34%
+APOLLOHOSP.NS   70440000000 58420000000     20.58% 66060000000      6.63% 10920000000 8520000000     28.17% 10110000000      8.01%   6100000000   4410000000      38.32%   5510000000      10.71%
 ASIANPAINT.NS   105420000000 89390000000     17.93% 92470000000     14.00% 21690000000 16250000000     33.48% 17870000000     21.38%  15590000000  11170000000      39.57%  11850000000      31.56%
 AXISBANK.NS     355420000000 323480000000      9.87% 341710000000      4.01%        nan        nan        N/A        nan        N/A  76700000000  62790000000      22.15%  76420000000       0.37%
 BAJAJ-AUTO.NS   216890000000 131330000000     65.15% 178320000000     21.63% 45280000000 27930000000     62.12% 30750000000     47.25%  31890000000  22100000000      44.30%  34920000000      -8.68%
@@ -22,6 +23,7 @@ CIPLA.NS        71190000000 69570000000      2.33% 65410000000      8.84% 119200
 COALINDIA.NS    462550000000 358420000000     29.05% 464900000000     -0.51% 120690000000 125210000000     -3.61% 126730000000     -4.77%  88500000000  87340000000       1.33% 109080000000     -18.87%
 DRREDDY.NS      81000000000 85720000000     -5.51% 75460000000      7.34% 8600000000 21740000000    -60.44% 3820000000    125.13%   4360000000  14100000000     -69.08%   2210000000      97.29%
 EICHERMOT.NS    66320000000 50420000000     31.54% 60800000000      9.08% 15910000000 12030000000     32.25% 15140000000      5.09%  14630000000  12050000000      21.41%  15200000000      -3.75%
+GRASIM.NS       487160000000 401180000000     21.43% 511010000000     -4.67% 111520000000 88220000000     26.41% 108760000000      2.54%  38460000000  27670000000      39.00%  38020000000       1.16%
 HCLTECH.NS      345790000000 303490000000     13.94% 339810000000      1.76% 68700000000 60350000000     13.84% 67120000000      2.35%  46260000000  38440000000      20.34%  44900000000       3.03%
 HDFCBANK.NS     905750000000 873720000000      3.67% 871820000000      3.89%        nan        nan        N/A        nan        N/A 203830000000 170900000000      19.27% 210740000000      -3.28%
 HDFCLIFE.NS     337590000000 294630000000     14.58% 198900000000     69.73% 5060000000 4390000000     15.26% 1080000000    368.52%   6110000000   5480000000      11.50%   4970000000      22.94%
@@ -57,37 +59,38 @@ Index statistics omitted; focus on aggregate index growth metrics.
 ====================================================================================================
 Index-Level Summary:
 ====================================================================================================
-Declared Index Weight Represented: 89.20%
+Declared Index Weight Represented: 90.88%
 
-Normal Revenue YoY Growth (index aggregate): 17.70%
-Weighted Revenue YoY Growth: 16.87%
-Normal Operating Profit YoY Growth (index aggregate): 11.10%
-Weighted Operating Profit YoY Growth: 10.68%
-Normal Profit YoY Growth (index aggregate): 11.59%
-Weighted Profit YoY Growth: 5.46%
+Normal Revenue YoY Growth (index aggregate): 17.81%
+Weighted Revenue YoY Growth: 16.90%
+Normal Operating Profit YoY Growth (index aggregate): 11.69%
+Weighted Operating Profit YoY Growth: 10.86%
+Normal Profit YoY Growth (index aggregate): 12.01%
+Weighted Profit YoY Growth: 5.57%
 
-Normal Revenue QoQ Growth (index aggregate): 3.86%
-Weighted Revenue QoQ Growth: 4.26%
-Normal Operating Profit QoQ Growth (index aggregate): 10.79%
-Weighted Operating Profit QoQ Growth: 7.81%
-Normal Profit QoQ Growth (index aggregate): -4.01%
+Normal Revenue QoQ Growth (index aggregate): 3.60%
+Weighted Revenue QoQ Growth: 4.20%
+Normal Operating Profit QoQ Growth (index aggregate): 10.43%
+Weighted Operating Profit QoQ Growth: 7.74%
+Normal Profit QoQ Growth (index aggregate): -3.89%
 Weighted Profit QoQ Growth: 2.06%
 
-Analysis generated at: 2026-08-12T14:32:45.850270
+Analysis generated at: 2026-08-13T14:34:03.087732
 ================================================================================
 
 ================================================================================
 Q1 FY27 Earnings Analysis - NIFTY MIDCAP 100
 ================================================================================
 
-Total Declared Companies (Q1 FY27): 73
-Companies with Q1 FY26 comparison: 71
+Total Declared Companies (Q1 FY27): 76
+Companies with Q1 FY26 comparison: 74
 
 
 TICKER             CUR_REV     PY_REV   YOY_REV%    QOQ_REV   QOQ_REV%     CUR_OP      PY_OP    YOY_OP%     QOQ_OP    QOQ_OP%   CUR_PROFIT    PY_PROFIT YOY_PROFIT%   QOQ_PROFIT QOQ_PROFIT%
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 360ONE.NS       12260000000 9110000000     34.58% 11150000000      9.96% 7730000000 5660000000     36.57% 6630000000     16.59%   3310000000   2850000000      16.14%   2890000000      14.53%
 ABCAPITAL.NS    121800000000 95030000000     28.17% 134590000000     -9.50%        nan        nan        N/A        nan        N/A  12240000000   8510000000      43.83%  11650000000       5.06%
+ASTRAL.NS       15780000000 13610000000     15.94% 20880000000    -24.43% 2310000000 1850000000     24.86% 3830000000    -39.69%   1200000000    790000000      51.90%   2130000000     -43.66%
 ATGL.NS         17540000000 13790000000     27.19% 15570000000     12.65% 2700000000 2930000000     -7.85% 3010000000    -10.30%   1420000000   1650000000     -13.94%   1680000000     -15.48%
 AUROPHARMA.NS   91500000000 78680000000     16.29% 88530000000      3.35% 18800000000 16030000000     17.28% 17500000000      7.43%  10320000000   8240000000      25.24%   9210000000      12.05%
 BANKINDIA.NS    200970000000 184670000000      8.83% 195730000000      2.68%        nan        nan        N/A        nan        N/A  33040000000  18310000000      80.45%  30890000000       6.96%
@@ -102,6 +105,7 @@ EXIDEIND.NS     55280000000 46950000000     17.74% 47350000000     16.75% 621000
 FEDERALBNK.NS   78620000000 71510000000      9.94% 79470000000     -1.07%        nan        nan        N/A        nan        N/A  13020000000   9510000000      36.91%  13920000000      -6.47%
 FORTIS.NS       25450000000 21670000000     17.44% 23650000000      7.61% 5370000000 4910000000      9.37% 5320000000      0.94%   2730000000   2670000000       2.25%   2710000000       0.74%
 GLENMARK.NS     40180000000 32640000000     23.10% 37710000000      6.55% 8050000000 5810000000     38.55% 7630000000      5.50%   4830000000    470000000     927.66%   3010000000      60.47%
+GMRAIRPORT.NS   39670000000 32050000000     23.78% 39380000000      0.74% 14500000000 11650000000     24.46% 14450000000      0.35%   1480000000  -1370000000     208.03%   4000000000     -63.00%
 GODFRYPHLP.NS   12060000000 14860000000    -18.84% 17870000000    -32.51% 1810000000 3380000000    -46.45% 5530000000    -67.27%   1980000000   3560000000     -44.38%   5210000000     -62.00%
 GODREJPROP.NS   5060000000 4350000000     16.32% 34580000000    -85.37% -2940000000 -2700000000        N/A 5220000000   -156.32%   3490000000   5980000000     -41.64%   6450000000     -45.89%
 GROWW.NS        15010000000 9040000000     66.04% 15050000000     -0.27% 9700000000 4830000000    100.83% 9380000000      3.41%   7350000000   3780000000      94.44%   6860000000       7.14%
@@ -121,6 +125,7 @@ KALYANKJIL.NS   105890000000 72680000000     45.69% 102750000000      3.06% 6330
 KEI.NS          31850000000 25900000000     22.97% 34760000000     -8.37% 3960000000 2580000000     53.49% 3820000000      3.66%   2740000000   1960000000      39.80%   2840000000      -3.52%
 KPITTECH.NS     16749940000 15390000000      8.84% 17110000000     -2.10% 1602980000 2950000000    -45.66% 3170000000    -49.43%   1171780000   1720000000     -31.87%   1630000000     -28.11%
 LAURUSLABS.NS   20260000000 15700000000     29.04% 18120000000     11.81% 6380000000 3820000000     67.02% 5120000000     24.61%   3620000000   1620000000     123.46%   2820000000      28.37%
+LENSKART.NS     27140000000 18940000000     43.29% 25160000000      7.87% 5880000000 3360000000     75.00% 5360000000      9.70%   2280000000    610000000     273.77%   2040000000      11.76%
 LICHSGFIN.NS    70830000000 72500000000     -2.30% 72120000000     -1.79%        nan        nan        N/A        nan        N/A  14990000000  13640000000       9.90%  14930000000       0.40%
 LTF.NS          52130000000 42600000000     22.37% 47710000000      9.26%        nan        nan        N/A        nan        N/A   9160000000   7010000000      30.67%   8090000000      13.23%
 LUPIN.NS        82770000000 62680000000     32.05% 74750000000     10.73% 24500000000 17270000000     41.86% 24860000000     -1.45%  14170000000  12210000000      16.05%  14690000000      -3.54%
@@ -165,23 +170,23 @@ Index statistics omitted; focus on aggregate index growth metrics.
 ====================================================================================================
 Index-Level Summary:
 ====================================================================================================
-Declared Index Weight Represented: 74.83%
+Declared Index Weight Represented: 76.96%
 
-Normal Revenue YoY Growth (index aggregate): 20.01%
-Weighted Revenue YoY Growth: 20.84%
-Normal Operating Profit YoY Growth (index aggregate): -15.44%
-Weighted Operating Profit YoY Growth: -15.75%
-Normal Profit YoY Growth (index aggregate): 37.26%
-Weighted Profit YoY Growth: 36.41%
+Normal Revenue YoY Growth (index aggregate): 20.12%
+Weighted Revenue YoY Growth: 20.90%
+Normal Operating Profit YoY Growth (index aggregate): -14.01%
+Weighted Operating Profit YoY Growth: -14.68%
+Normal Profit YoY Growth (index aggregate): 37.68%
+Weighted Profit YoY Growth: 36.60%
 
-Normal Revenue QoQ Growth (index aggregate): 4.76%
-Weighted Revenue QoQ Growth: 5.31%
-Normal Operating Profit QoQ Growth (index aggregate): -31.23%
-Weighted Operating Profit QoQ Growth: -33.61%
-Normal Profit QoQ Growth (index aggregate): 1.47%
-Weighted Profit QoQ Growth: 2.23%
+Normal Revenue QoQ Growth (index aggregate): 4.63%
+Weighted Revenue QoQ Growth: 5.22%
+Normal Operating Profit QoQ Growth (index aggregate): -30.39%
+Weighted Operating Profit QoQ Growth: -32.87%
+Normal Profit QoQ Growth (index aggregate): 0.83%
+Weighted Profit QoQ Growth: 1.64%
 
-Analysis generated at: 2026-08-12T14:32:45.882674
+Analysis generated at: 2026-08-13T14:34:03.113203
 ================================================================================
 
 ================================================================================
@@ -282,5 +287,5 @@ Weighted Operating Profit QoQ Growth: 3.97%
 Normal Profit QoQ Growth (index aggregate): 12.84%
 Weighted Profit QoQ Growth: 8.47%
 
-Analysis generated at: 2026-08-12T14:32:45.913949
+Analysis generated at: 2026-08-13T14:34:03.137791
 ================================================================================
