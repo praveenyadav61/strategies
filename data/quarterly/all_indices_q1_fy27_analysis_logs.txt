@@ -77,7 +77,7 @@ Weighted Operating Profit QoQ Growth: 7.25%
 Normal Profit QoQ Growth (index aggregate): -5.88%
 Weighted Profit QoQ Growth: 1.69%
 
-Analysis generated at: 2026-09-01T17:20:15.507117
+Analysis generated at: 2026-09-02T17:10:32.201761
 ================================================================================
 
 ================================================================================
@@ -196,7 +196,7 @@ Weighted Operating Profit QoQ Growth: -31.01%
 Normal Profit QoQ Growth (index aggregate): -0.02%
 Weighted Profit QoQ Growth: 0.33%
 
-Analysis generated at: 2026-09-01T17:20:15.536051
+Analysis generated at: 2026-09-02T17:10:32.232704
 ================================================================================
 
 ================================================================================
@@ -306,5 +306,5 @@ Weighted Operating Profit QoQ Growth: 3.68%
 Normal Profit QoQ Growth (index aggregate): 8.13%
 Weighted Profit QoQ Growth: 5.39%
 
-Analysis generated at: 2026-09-01T17:20:15.563531
+Analysis generated at: 2026-09-02T17:10:32.263672
 ================================================================================
